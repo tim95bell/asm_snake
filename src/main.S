@@ -47,7 +47,7 @@
     empty_cell_colour: .4byte 0xFFDDBB99
     apple_colour: .4byte 0xFF5533BB
     snake_body_colour: .4byte 0xFFAA22CC
-    snake_head_colour: .4byte 0xFFAA22CC
+    snake_head_colour: .4byte 0xFFAA22FF
 
 .macro CALC_CELL_SIZE, result, scratch, cell_count_1d, board_size_1d, margin_divisor
     fmov \scratch, #1
@@ -73,6 +73,13 @@
     subs \x, \x, #1
     add \n, \n, \x
     csel \x, \n, \x, mi
+.endm
+
+.macro FLERP a, b, t
+    // b = b - a
+    fsub \b, \b, \a
+    // a = t * b' + a = t * (b - a) + a
+    fmadd \a, \t, \b, \a
 .endm
 
 /*
@@ -206,7 +213,7 @@ struct Game {
         fmov d8, d0 // last update time
         fmov d9, xzr
 
-        mov w0, #4
+        mov w0, #60
         bl _SetTargetFPS
 
         b draw
@@ -399,25 +406,6 @@ struct Game {
     // body
     add x23, x20, body_offset
 
-    // draw head
-    // colour
-    adrp x0, snake_head_colour@PAGE
-    add x0, x0, snake_head_colour@PAGEOFF
-    ldr x0, [x0]
-    // body_ptr
-    mov x1, x23
-    // index
-    mov x2, x21
-    // cell_size
-    fmov s0, s10
-    // cell_size_plus_margin_size
-    fmov s1, s11
-    // board_x_offset
-    fmov s2, s12
-    // board_y_offset
-    fmov s3, s13
-    bl draw_snake_cell
-
     // draw snake body (excluding head)
     adrp x24, snake_body_colour@PAGE
     add x24, x24, snake_body_colour@PAGEOFF
@@ -429,7 +417,7 @@ struct Game {
     head_before_tail:
     // TODO(TB): implement drawing body when head is before tail
 
-    b end_draw_snake
+    b end_draw_snake_body
 
     tail_before_head_body_loop:
         // colour
@@ -454,7 +442,50 @@ struct Game {
         cmp x21, x22
         b.gt tail_before_head_body_loop
 
-    end_draw_snake:
+    end_draw_snake_body:
+
+    mov x3, #2
+    // prev_x_index
+    mov x4, BODY_CAPACITY
+    mov x0, x21
+    DEC_CLAMP_ZERO_TO_N x0, x4
+    mul x0, x0, x3
+    ldrb w1, [x23, x0]
+    scvtf s0, w1
+    add x0, x0, #1
+    // prev_y_index
+    ldrb w2, [x23, x0]
+    scvtf s1, w2
+    // x_index
+    mul x0, x21, x3
+    ldrb w1, [x23, x0]
+    scvtf s2, w1
+    add x0, x0, #1
+    // y_index
+    ldrb w2, [x23, x0]
+    scvtf s3, w2
+    // prev_x_pos
+    fmadd s0, s0, s11, s12
+    // prev_y_pos
+    fmadd s1, s1, s11, s13
+    // x_pos
+    fmadd s2, s2, s11, s12
+    // y_pos
+    fmadd s3, s3, s11, s13
+    // x_pos
+    fcvt s4, d9
+    FLERP s0, s2, s4
+    // y_pos
+    FLERP s1, s3, s4
+    // width
+    fmov s2, s10
+    // height
+    fmov s3, s10
+    // colour
+    adrp x0, snake_head_colour@PAGE
+    add x0, x0, snake_head_colour@PAGEOFF
+    ldr x0, [x0]
+    bl _DrawRectangleV
 
     bl _EndDrawing
 

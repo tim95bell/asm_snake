@@ -8,6 +8,19 @@
 .equ MARGIN_DIVISOR, 5
 // TIME_STEP_S: the time in seconds, that everything updates in the game by (since it has discrete steps)
 .equ TIME_STEP_S, 2
+.equ UP, 0
+.equ RIGHT, 1
+.equ DOWN, 2
+.equ LEFT, 3
+.equ board_size_1d_offset, 0
+.equ board_x_offset_offset, 4
+.equ board_y_offset_offset, 8
+.equ cell_size_offset, 12
+.equ margin_size_offset, 16
+.equ tail_offset, 20
+.equ head_offset, 22
+.equ move_direction_offset, 24
+.equ body_offset, 25
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -41,25 +54,44 @@
     fdiv \result, \margin_divisor, \result
     fmul \result, \result, \board_size_1d
 .endm
+
 /*
 struct Game {
-    float board_size_1d; // pixels
-    float board_x_offset; // pixels
-    float board_y_offset; // pixels
-    float cell_size; // pixels
-    float margin_size; // pixels
+    F32 board_size_1d; // pixels
+    F32 board_x_offset; // pixels
+    F32 board_y_offset; // pixels
+    F32 cell_size; // pixels
+    F32 margin_size; // pixels
+    // tail: index of head cell. multiply by 2 to get byte location
+    U16 tail;
+    // head: index of head cell. multiply by 2 to get byte location
+    U16 head;
+    U8 move_direction;
+    // pairs of U8 for x, y coordinates.
+    // one for every cell, + 1 so we can remember where the tail end was last update
+    U8 body[((board_size_1d * board_size_1d) + 1) * 2];
 };
 */
 
+// D_REGISTER_BACKUP_SIZE = 0x40
+// X_REGISTER_BACKUP_SIZE = 0x40
+// FP_AND_LR_SIZE = 0x10
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x81B
+// STACK_FRAME_SIZE = 0x8aB (round up to multiple of 0x10) = 0x8b0
+
 .text
     _main:
-        stp fp, lr, [sp, #-0x80]!
+        sub sp, sp, #0x8b0
+        stp fp, lr, [sp]
         stp d14, d15, [sp, #0x10]
         stp d12, d13, [sp, #0x20]
         stp d10, d11, [sp, #0x30]
         stp d8, d9, [sp, #0x40]
-        stp x19, x20, [sp, #0x50]
-        add x20, sp, #0x60
+        stp x25, x26, [sp, #0x50]
+        stp x23, x24, [sp, #0x60]
+        stp x21, x22, [sp, #0x70]
+        stp x19, x20, [sp, #0x80]
+        add x20, sp, #0x90
         mov fp, sp
 
         mov x0, #640
@@ -104,9 +136,51 @@ struct Game {
         fsub s0, s13, s1 // cell_count_1d - 1
         fdiv s15, s15, s0 // margin size
 
+        // board_size_1d , board_x_offset
         stp s10, s11, [x20]
+        // board_y_offset, cell_size
         stp s12, s14, [x20, #0x8]
+        // margin_size
         str s15, [x20, #0x10]
+        // tail
+        mov w0, #0
+        strh w0, [x20, #0x14]
+        // head
+        mov w0, #1
+        strh w0, [x20, #0x16]
+        // move direction
+        mov w0, RIGHT
+        strb w0, [x20, #0x18]
+        mov w0, #16
+        mov w1, #17
+        // body[0].x
+        strb w0, [x20, #0x19]
+        // body[0].y
+        strb w0, [x20, #0x1a]
+        // body[1].x
+        strb w1, [x20, #0x1b]
+        // body[1].y
+        strb w0, [x20, #0x1c]
+
+        // TODO(TB): remove this
+        add w1, w1, #1
+        // body[2].x
+        strb w1, [x20, #0x1d]
+        // body[2].y
+        strb w0, [x20, #0x1e]
+        add w0, w0, #1
+        // body[3].x
+        strb w1, [x20, #0x1f]
+        // body[3].y
+        strb w0, [x20, #0x20]
+        add w0, w0, #1
+        // body[4].x
+        strb w1, [x20, #0x21]
+        // body[4].y
+        strb w0, [x20, #0x22]
+        // head
+        mov w0, #4
+        strh w0, [x20, #0x16]
 
         bl _GetTime
         fmov d8, d0 // last update time
@@ -217,20 +291,127 @@ struct Game {
         fcmp s14, s8
         b.lt x_loop
 
-        bl _EndDrawing
         ldp d8, d9, [sp], #0x10
+
+    // TODO(TB): will this clear the other bits in the x register?
+    // w21 = head
+    ldrh w21, [x20, head_offset]
+    // w22 = tail
+    ldrh w22, [x20, tail_offset]
+    // s10 = cell_size
+    ldp s10, s11, [x20, cell_size_offset]
+    // s11 = cell_size_plus_margin_size
+    fadd s11, s11, s10
+    // s2 = board_x_offset
+    // s3 = board_y_offset
+    ldp s12, s13, [x20, board_x_offset_offset]
+    // body
+    add x23, x20, body_offset
+
+    // draw head
+    // colour
+    adrp x0, snake_head_colour@PAGE
+    add x0, x0, snake_head_colour@PAGEOFF
+    ldr x0, [x0]
+    // body_ptr
+    mov x1, x23
+    // index
+    mov x2, x21
+    // cell_size
+    fmov s0, s10
+    // cell_size_plus_margin_size
+    fmov s1, s11
+    // board_x_offset
+    fmov s2, s12
+    // board_y_offset
+    fmov s3, s13
+    bl draw_snake_cell
+
+    // draw snake body (excluding head)
+    adrp x24, snake_body_colour@PAGE
+    add x24, x24, snake_body_colour@PAGEOFF
+    ldr x24, [x24]
+
+    cmp x21, x22
+    b.gt tail_before_head_body_loop_cond
+
+    head_before_tail:
+    // TODO(TB): implement drawing body when head is before tail
+
+    b end_draw_snake
+
+    tail_before_head_body_loop:
+        // colour
+        mov x0, x24
+        // body_ptr
+        mov x1, x23
+        // index
+        mov x2, x22
+        // cell_size
+        fmov s0, s10
+        // cell_size_plus_margin_size
+        fmov s1, s11
+        // board_x_offset
+        fmov s2, s12
+        // board_y_offset
+        fmov s3, s13
+        bl draw_snake_cell
+
+    tail_before_head_body_loop_cond:
+        // tail += 1
+        add x22, x22, #1
+        cmp x21, x22
+        b.gt tail_before_head_body_loop
+
+    end_draw_snake:
+
+    bl _EndDrawing
 
     game_loop_condition:
         bl _WindowShouldClose
         cbz x0, game_loop
     done:
         bl _CloseWindow
-        ldp fp, lr, [sp], #0x10
-        ldp d14, d15, [sp], #0x10
-        ldp d12, d13, [sp], #0x10
-        ldp d10, d11, [sp], #0x10
-        ldp d8, d9, [sp], #0x10
-        ldp x19, x20, [sp], #0x10
-        add sp, sp, #0x20
+        ldp fp, lr, [sp]
+        ldp d14, d15, [sp, #0x10]
+        ldp d12, d13, [sp, #0x20]
+        ldp d10, d11, [sp, #0x30]
+        ldp d8, d9, [sp, #0x40]
+        ldp x25, x26, [sp, #0x50]
+        ldp x23, x24, [sp, #0x60]
+        ldp x21, x22, [sp, #0x70]
+        ldp x19, x20, [sp, #0x80]
+        add sp, sp, #0x8b0
         mov x0, xzr
+        ret
+
+    // x_colour, x_body_ptr, x_index
+    // s_cell_size, s_cell_size_plus_margin_size, s_x_offset, s_y_offset
+    draw_snake_cell:
+        stp fp, lr, [sp, #-0x10]!
+        mov fp, sp
+        mov x5, #2
+        mul x2, x2, x5
+        fmov s5, s2
+        fmov s6, s3
+        // width = cell_size
+        fmov s2, s0
+        // height = cell_size
+        fmov s3, s0
+        // s_cell_size_plus_margin_size
+        fmov s4, s1
+        // x_index
+        ldrb w3, [x1, x2]
+        scvtf s0, w3
+        add x2, x2, #1
+        // y_index
+        ldrb w4, [x1, x2]
+        scvtf s1, w4
+        // x_pos
+        fmadd s0, s0, s4, s5
+        // y_pos
+        fmadd s1, s1, s4, s6
+        // draw
+        bl _DrawRectangleV
+        ldp fp, lr, [sp], #0x10
         ret

@@ -21,8 +21,21 @@
 .equ margin_size_offset, 16
 .equ tail_offset, 20
 .equ head_offset, 22
-.equ move_direction_offset, 24
-.equ body_offset, 25
+.equ previous_move_direction_offset, 24
+.equ move_direction_offset, 25
+.equ body_offset, 26
+.equ UP_KEY_CODE, 265
+.equ RIGHT_KEY_CODE, 262
+.equ DOWN_KEY_CODE, 264
+.equ LEFT_KEY_CODE, 263
+.equ INITIAL_WINDOW_WIDTH, 640
+.equ INITIAL_WINDOW_HEIGHT, 480
+// D_REGISTER_BACKUP_SIZE = 0x40
+// X_REGISTER_BACKUP_SIZE = 0x40
+// FP_AND_LR_SIZE = 0x10
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x81c
+// STACK_FRAME_SIZE = 0x8ac (round up to multiple of 0x10) = 0x8b0
+.equ STACK_FRAME_SIZE, 0x8b0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -37,11 +50,17 @@
 .extern _printf
 .extern _GetTime
 .extern _SetTargetFPS
+.extern _GetKeyPressed
 
 .data
     window_name: .asciz "ASM Snake"
     update_string: .asciz "update\n"
     draw_string: .asciz "draw with delta: %f\n"
+    key_pressed_string: .asciz "key pressed: %d\n"
+    up_string: .asciz "up\n"
+    right_string: .asciz "right\n"
+    down_string: .asciz "down\n"
+    left_string: .asciz "left\n"
     // ABGR (because little endian)
     clear_colour: .4byte 0xFF224466
     empty_cell_colour: .4byte 0xFFDDBB99
@@ -100,15 +119,9 @@ struct Game {
 };
 */
 
-// D_REGISTER_BACKUP_SIZE = 0x40
-// X_REGISTER_BACKUP_SIZE = 0x40
-// FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x81B
-// STACK_FRAME_SIZE = 0x8aB (round up to multiple of 0x10) = 0x8b0
-
 .text
     _main:
-        sub sp, sp, #0x8b0
+        sub sp, sp, STACK_FRAME_SIZE
         stp fp, lr, [sp]
         stp d14, d15, [sp, #0x10]
         stp d12, d13, [sp, #0x20]
@@ -121,8 +134,8 @@ struct Game {
         add x20, sp, #0x90
         mov fp, sp
 
-        mov x0, #640
-        mov x1, #480
+        mov x0, INITIAL_WINDOW_WIDTH
+        mov x1, INITIAL_WINDOW_HEIGHT
         adrp x2, window_name@PAGE
         add x2, x2, window_name@PAGEOFF
         bl _InitWindow
@@ -164,50 +177,61 @@ struct Game {
         fdiv s15, s15, s0 // margin size
 
         // board_size_1d , board_x_offset
-        stp s10, s11, [x20]
+        stp s10, s11, [x20, board_size_1d_offset]
         // board_y_offset, cell_size
-        stp s12, s14, [x20, #0x8]
+        stp s12, s14, [x20, board_y_offset_offset]
         // margin_size
-        str s15, [x20, #0x10]
+        str s15, [x20, margin_size_offset]
         // tail
         mov w0, #0
-        strh w0, [x20, #0x14]
+        strh w0, [x20, tail_offset]
         // head
         mov w0, #1
-        strh w0, [x20, #0x16]
+        strh w0, [x20, head_offset]
         // move direction
         mov w0, RIGHT
-        strb w0, [x20, #0x18]
+        strb w0, [x20, previous_move_direction_offset]
+        strb w0, [x20, move_direction_offset]
         mov w0, #16
         mov w1, #17
         // body[0].x
-        strb w0, [x20, #0x19]
+        mov x2, body_offset
+        strb w0, [x20, x2]
         // body[0].y
-        strb w0, [x20, #0x1a]
+        add x2, x2, #1
+        strb w0, [x20, x2]
         // body[1].x
-        strb w1, [x20, #0x1b]
+        add x2, x2, #1
+        strb w1, [x20, x2]
         // body[1].y
-        strb w0, [x20, #0x1c]
+        add x2, x2, #1
+        strb w0, [x20, x2]
 
         // TODO(TB): remove this
         add w1, w1, #1
         // body[2].x
-        strb w1, [x20, #0x1d]
+        add x2, x2, #1
+        strb w1, [x20, x2]
         // body[2].y
-        strb w0, [x20, #0x1e]
+        add x2, x2, #1
+        strb w0, [x20, x2]
         add w0, w0, #1
         // body[3].x
-        strb w1, [x20, #0x1f]
+        add x2, x2, #1
+        strb w1, [x20, x2]
         // body[3].y
-        strb w0, [x20, #0x20]
+        add x2, x2, #1
+        strb w0, [x20, x2]
         add w0, w0, #1
         // body[4].x
-        strb w1, [x20, #0x21]
+        add x2, x2, #1
+        strb w1, [x20, x2]
         // body[4].y
-        strb w0, [x20, #0x22]
+        add x2, x2, #1
+        strb w0, [x20, x2]
         // head
         mov w0, #4
-        strh w0, [x20, #0x16]
+        strh w0, [x20, head_offset]
 
         bl _GetTime
         fmov d8, d0 // last update time
@@ -218,6 +242,47 @@ struct Game {
 
         b draw
     game_loop:
+        // handle input
+        mov w21, UP_KEY_CODE
+        mov w22, RIGHT_KEY_CODE
+        mov w23, DOWN_KEY_CODE
+        mov w24, LEFT_KEY_CODE
+        b input_loop_cond
+        input_loop:
+            cmp w0, w21
+            b.eq 1f
+            cmp w0, w22
+            b.eq 2f
+            cmp w0, w23
+            b.eq 3f
+            cmp w0, w24
+            b.eq 4f
+            b 5f
+            1: // up
+                adrp x0, up_string@PAGE
+                add x0, x0, up_string@PAGEOFF
+                bl _printf
+                b 5f
+            2: // right
+                adrp x0, right_string@PAGE
+                add x0, x0, right_string@PAGEOFF
+                bl _printf
+                b 5f
+            3: // down
+                adrp x0, down_string@PAGE
+                add x0, x0, down_string@PAGEOFF
+                bl _printf
+                b 5f
+            4: // left
+                adrp x0, left_string@PAGE
+                add x0, x0, left_string@PAGEOFF
+                bl _printf
+            5: // done
+
+        input_loop_cond:
+            bl _GetKeyPressed
+            cbnz w0, input_loop
+
         // update
         bl _GetTime
 
@@ -229,9 +294,11 @@ struct Game {
 
         b update_loop_condition
         update_loop:
-            adrp x0, update_string@PAGE
-            add x0, x0, update_string@PAGEOFF
-            bl _printf
+            ldrb w0, [x20, move_direction_offset]
+            strb w0, [x20, previous_move_direction_offset]
+            //adrp x0, update_string@PAGE
+            //add x0, x0, update_string@PAGEOFF
+            //bl _printf
 
             // x21 = body
             add x21, x20, body_offset
@@ -315,11 +382,11 @@ struct Game {
     draw:
         stp d8, d9, [sp, #-0x10]!
 
-        str d9, [sp, #-0x10]!
-        adrp x0, draw_string@PAGE
-        add x0, x0, draw_string@PAGEOFF
-        bl _printf
-        add sp, sp, #0x10
+        //str d9, [sp, #-0x10]!
+        //adrp x0, draw_string@PAGE
+        //add x0, x0, draw_string@PAGEOFF
+        //bl _printf
+        //add sp, sp, #0x10
 
         bl _BeginDrawing
         adrp x0, clear_colour@PAGE
@@ -343,8 +410,11 @@ struct Game {
         // s15 = y_index
         scvtf s0, wzr
         fmov s14, s0 // x_index
-        ldp s10, s11, [x20, #0x4]
-        ldp s12, s13, [x20, #0xc]
+        // board_x_offset, board_y_offset
+        ldp s10, s11, [x20, board_x_offset_offset]
+        // cell_size, margin_size
+        ldp s12, s13, [x20, cell_size_offset]
+        // cell_size + margin_size
         fadd s13, s13, s12
         mov w0, CELL_COUNT_1D
         scvtf s8, w0 // board cell count 1d
@@ -389,7 +459,7 @@ struct Game {
         fcmp s14, s8
         b.lt x_loop
 
-        ldp d8, d9, [sp], #0x10
+    ldp d8, d9, [sp], #0x10
 
     // TODO(TB): will this clear the other bits in the x register?
     // w21 = head
@@ -503,7 +573,7 @@ struct Game {
         ldp x23, x24, [sp, #0x60]
         ldp x21, x22, [sp, #0x70]
         ldp x19, x20, [sp, #0x80]
-        add sp, sp, #0x8b0
+        add sp, sp, STACK_FRAME_SIZE
         mov x0, xzr
         ret
 

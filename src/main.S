@@ -247,6 +247,7 @@ struct Game {
         mov w22, RIGHT_KEY_CODE
         mov w23, DOWN_KEY_CODE
         mov w24, LEFT_KEY_CODE
+        ldrb w25, [x20, previous_move_direction_offset]
         b input_loop_cond
         input_loop:
             cmp w0, w21
@@ -259,24 +260,32 @@ struct Game {
             b.eq 4f
             b 5f
             1: // up
-                adrp x0, up_string@PAGE
-                add x0, x0, up_string@PAGEOFF
-                bl _printf
+                cmp w25, DOWN
+                b.eq 5f
+
+                mov w0, UP
+                strb w0, [x20, move_direction_offset]
                 b 5f
             2: // right
-                adrp x0, right_string@PAGE
-                add x0, x0, right_string@PAGEOFF
-                bl _printf
+                cmp w25, LEFT
+                b.eq 5f
+
+                mov w0, RIGHT
+                strb w0, [x20, move_direction_offset]
                 b 5f
             3: // down
-                adrp x0, down_string@PAGE
-                add x0, x0, down_string@PAGEOFF
-                bl _printf
+                cmp w25, UP
+                b.eq 5f
+
+                mov w0, DOWN
+                strb w0, [x20, move_direction_offset]
                 b 5f
             4: // left
-                adrp x0, left_string@PAGE
-                add x0, x0, left_string@PAGEOFF
-                bl _printf
+                cmp w25, RIGHT
+                b.eq 5f
+
+                mov w0, LEFT
+                strb w0, [x20, move_direction_offset]
             5: // done
 
         input_loop_cond:

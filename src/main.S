@@ -4,10 +4,12 @@
 
 // CELL_COUNT_1D: amount of cells in a single dimension. The grid is a square, so this is both the rows and cols.
 .equ CELL_COUNT_1D, 32
+// BODY_CAPACITY: ((CELL_COUNT_1D * CELL_COUNT_1D) + 1)
+.equ BODY_CAPACITY, 1025
 // MARGIN_DIVISOR: margin_size = cell_size / MARGIN_DIVISOR
 .equ MARGIN_DIVISOR, 5
 // TIME_STEP_S: the time in seconds, that everything updates in the game by (since it has discrete steps)
-.equ TIME_STEP_S, 2
+.equ TIME_STEP_S, 1
 .equ UP, 0
 .equ RIGHT, 1
 .equ DOWN, 2
@@ -55,6 +57,24 @@
     fmul \result, \result, \board_size_1d
 .endm
 
+// increment x, wrapping to keep in range [0, n)
+// result in x
+// n also modified
+.macro INC_CLAMP_ZERO_TO_N, x, n
+    add \x, \x, #1
+    subs \n, \x, \n
+    csel \x, \x, \n, mi
+.endm
+
+// decrement x, wrapping to keep in range [0, n)
+// result in x
+// n also modified
+.macro DEC_CLAMP_ZERO_TO_N, x, n
+    subs \x, \x, #1
+    add \n, \n, \x
+    csel \x, \n, \x, mi
+.endm
+
 /*
 struct Game {
     F32 board_size_1d; // pixels
@@ -69,7 +89,7 @@ struct Game {
     U8 move_direction;
     // pairs of U8 for x, y coordinates.
     // one for every cell, + 1 so we can remember where the tail end was last update
-    U8 body[((board_size_1d * board_size_1d) + 1) * 2];
+    U8 body[((cell_count_1d * cell_count_1d) + 1) * 2];
 };
 */
 
@@ -205,6 +225,77 @@ struct Game {
             adrp x0, update_string@PAGE
             add x0, x0, update_string@PAGEOFF
             bl _printf
+
+            // x21 = body
+            add x21, x20, body_offset
+            // w22 = head
+            ldrh w22, [x20, head_offset]
+            // w23 = move_direction
+            ldrb w23, [x20, move_direction_offset]
+            // w24 = index
+            mov w0, #2
+            mul w24, w22, w0
+            // w25 = x
+            ldrb w25, [x21, x24]
+            // w26 = y
+            add w24, w24, #1
+            ldrb w26, [x21, x24]
+
+            // w24 = new head x index
+            mov w1, BODY_CAPACITY
+            mov w24, w22
+            INC_CLAMP_ZERO_TO_N w24, w1
+            mul w24, w24, w0
+
+            mov w0, #4
+            mul w23, w23, w0
+            adrp x1, jt@PAGE
+            add x1, x1, jt@PAGEOFF
+            add x1, x1, x23
+            // x0 = CELL_COUNT_1D
+            mov x0, CELL_COUNT_1D
+            br x1
+            jt:
+                b direction_up
+                b direction_right
+                b direction_down
+                b direction_left
+            direction_up:
+                mov w1, w0
+                DEC_CLAMP_ZERO_TO_N w26, w1
+                b direction_done
+            direction_right:
+                mov w1, w0
+                INC_CLAMP_ZERO_TO_N w25, w1
+                b direction_done
+            direction_down:
+                mov w1, w0
+                INC_CLAMP_ZERO_TO_N w26, w1
+                b direction_done
+            direction_left:
+                mov w1, w0
+                DEC_CLAMP_ZERO_TO_N w25, w1
+            direction_done:
+
+            // update new head x and y in body
+            strb w25, [x21, x24]
+            add w24, w24, #1
+            strb w26, [x21, x24]
+
+            // x0 = BODY_CAPACITY
+            mov x0, BODY_CAPACITY
+
+            // update head
+            mov w1, w0
+            INC_CLAMP_ZERO_TO_N w22, w1
+            strh w22, [x20, head_offset]
+
+            // TODO(TB): if NOT hit an apple
+            // update tail
+            // w22 = tail
+            ldrh w22, [x20, tail_offset]
+            INC_CLAMP_ZERO_TO_N w22, w0
+            strh w22, [x20, tail_offset]
 
             fadd d8, d8, d10
             fsub d9, d9, d10

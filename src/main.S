@@ -14,16 +14,20 @@
 .equ RIGHT, 1
 .equ DOWN, 2
 .equ LEFT, 3
-.equ board_size_1d_offset, 0
-.equ board_x_offset_offset, 4
-.equ board_y_offset_offset, 8
-.equ cell_size_offset, 12
-.equ margin_size_offset, 16
-.equ tail_offset, 20
-.equ head_offset, 22
-.equ previous_move_direction_offset, 24
-.equ move_direction_offset, 25
-.equ body_offset, 26
+.equ clear_colour_offset, 0
+.equ empty_cell_colour_offset, 8
+.equ apple_colour_offset, 16
+.equ snake_colour_offset, 24
+.equ board_size_1d_offset, 32
+.equ board_x_offset_offset, 36
+.equ board_y_offset_offset, 40
+.equ cell_size_offset, 44
+.equ margin_size_offset, 48
+.equ tail_offset, 52
+.equ head_offset, 54
+.equ previous_move_direction_offset, 56
+.equ move_direction_offset, 57
+.equ body_offset, 58
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -33,9 +37,9 @@
 // D_REGISTER_BACKUP_SIZE = 0x40
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x81c
-// STACK_FRAME_SIZE = 0x8ac (round up to multiple of 0x10) = 0x8b0
-.equ STACK_FRAME_SIZE, 0x8b0
+// GAME_STRUCT_SIZE = (8 + 8 + 8 + 8 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x83c
+// STACK_FRAME_SIZE = 0x8cc (round up to multiple of 0x10) = 0x8d0
+.equ STACK_FRAME_SIZE, 0x8d0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -47,20 +51,17 @@
 .extern _GetScreenHeight
 .extern _IsWindowReady
 .extern _DrawRectangleV
-.extern _printf
 .extern _GetTime
 .extern _SetTargetFPS
 .extern _GetKeyPressed
 
 .data
     window_name: .asciz "ASM Snake"
-    update_string: .asciz "update\n"
-    draw_string: .asciz "draw with delta: %f\n"
     // ABGR (because little endian)
     clear_colour: .4byte 0xFF224466
     empty_cell_colour: .4byte 0xFFDDBB99
     apple_colour: .4byte 0xFF5533BB
-    snake_body_colour: .4byte 0xFFAA22CC
+    snake_colour: .4byte 0xFFAA22CC
 
 .macro CALC_CELL_SIZE, result, scratch, cell_count_1d, board_size_1d, margin_divisor
     fmov \scratch, #1
@@ -89,9 +90,9 @@
 .endm
 
 .macro FLERP a, b, t
-    // b = b - a
+    // b` = b - a
     fsub \b, \b, \a
-    // a = t * b' + a = t * (b - a) + a
+    // a = t * b` + a = t * (b - a) + a
     fmadd \a, \t, \b, \a
 .endm
 
@@ -115,6 +116,10 @@
 
 /*
 struct Game {
+    U64 clear_colour;
+    U64 empty_cell_colour;
+    U64 apple_colour;
+    U64 snake_colour;
     F32 board_size_1d; // pixels
     F32 board_x_offset; // pixels
     F32 board_y_offset; // pixels
@@ -124,6 +129,7 @@ struct Game {
     U16 tail;
     // head: index of head cell. multiply by 2 to get byte location
     U16 head;
+    U8 previous_move_direction;
     U8 move_direction;
     // pairs of U8 for x, y coordinates.
     // one for every cell, + 1 so we can remember where the tail end was last update
@@ -146,6 +152,7 @@ struct Game {
         add x20, sp, #0x90
         mov fp, sp
 
+        // create window
         mov x0, INITIAL_WINDOW_WIDTH
         mov x1, INITIAL_WINDOW_HEIGHT
         adrp x2, window_name@PAGE
@@ -153,6 +160,24 @@ struct Game {
         bl _InitWindow
         bl _IsWindowReady
         cbz x0, done
+
+        // init snake struct
+        // clear_colour and empty_cell_colour
+        adrp x0, clear_colour@PAGE
+        add x0, x0, clear_colour@PAGEOFF
+        ldr x0, [x0]
+        adrp x1, empty_cell_colour@PAGE
+        add x1, x1, empty_cell_colour@PAGEOFF
+        ldr x1, [x1]
+        stp x0, x1, [x20, clear_colour_offset]
+        // apple_colour and snake_colour
+        adrp x0, apple_colour@PAGE
+        add x0, x0, apple_colour@PAGEOFF
+        ldr x0, [x0]
+        adrp x1, snake_colour@PAGE
+        add x1, x1, snake_colour@PAGEOFF
+        ldr x1, [x1]
+        stp x0, x1, [x20, apple_colour_offset]
 
         bl _GetScreenWidth
         scvtf s8, x0 // screen width (pixels)
@@ -266,8 +291,8 @@ struct Game {
         strb w0, [x20, x2]
 
         bl _GetTime
-        fmov d8, d0 // last update time
-        fmov d9, xzr
+        fcvt s8, d0 // last update time
+        fmov s9, wzr
 
         mov w0, #60
         bl _SetTargetFPS
@@ -326,20 +351,17 @@ struct Game {
 
         // update
         bl _GetTime
-
-        // d9 = time delta
-        fsub d9, d0, d8
-        // d10 = time step s
-        mov x0, TIME_STEP_S
-        scvtf d10, x0
+        fcvt s0, d0
+        // s9 = time delta
+        fsub s9, s0, s8
+        // s10 = time step s
+        mov w0, TIME_STEP_S
+        scvtf s10, w0
 
         b update_loop_condition
         update_loop:
             ldrb w0, [x20, move_direction_offset]
             strb w0, [x20, previous_move_direction_offset]
-            //adrp x0, update_string@PAGE
-            //add x0, x0, update_string@PAGEOFF
-            //bl _printf
 
             // x21 = body
             add x21, x20, body_offset
@@ -412,33 +434,23 @@ struct Game {
             INC_CLAMP_ZERO_TO_N w22, w0
             strh w22, [x20, tail_offset]
 
-            fadd d8, d8, d10
-            fsub d9, d9, d10
+            fadd s8, s8, s10
+            fsub s9, s9, s10
         update_loop_condition:
-            fcmp d9, d10
+            fcmp s9, s10
             b.gt update_loop
 
-        fdiv d9, d9, d10
+        fdiv s9, s9, s10
 
     draw:
-        stp d8, d9, [sp, #-0x10]!
-
-        //str d9, [sp, #-0x10]!
-        //adrp x0, draw_string@PAGE
-        //add x0, x0, draw_string@PAGEOFF
-        //bl _printf
-        //add sp, sp, #0x10
+        stp s8, s9, [sp, #-0x10]!
 
         bl _BeginDrawing
-        adrp x0, clear_colour@PAGE
-        add x0, x0, clear_colour@PAGEOFF
-        ldr x0, [x0]
+        ldr x0, [x20, clear_colour_offset]
         bl _ClearBackground
 
         // cell colour
-        adrp x19, empty_cell_colour@PAGE
-        add x19, x19, empty_cell_colour@PAGEOFF
-        ldr x19, [x19]
+        ldr x19, [x20, empty_cell_colour_offset]
 
         // draw grid
         // s8 = board_cell_count_1d
@@ -500,9 +512,9 @@ struct Game {
         fcmp s14, s8
         b.lt x_loop
 
-    ldp d8, d9, [sp], #0x10
+    ldp s8, s9, [sp], #0x10
 
-    stp d8, d9, [sp, #-0x10]!
+    stp s8, s9, [sp, #-0x10]!
 
     // TODO(TB): will this clear the other bits in the x register?
     // w21 = head
@@ -517,18 +529,13 @@ struct Game {
     // s13 = board_y_offset
     ldp s12, s13, [x20, board_x_offset_offset]
     // s14 = dt * cell_size
-    fcvt s9, d9
     fmul s14, s9, s10
     // s15 = (1 - dt) * cell_size
     fsub s15, s10, s14
     // body
     add x23, x20, body_offset
 
-    // draw snake body (excluding head)
-    adrp x24, snake_body_colour@PAGE
-    add x24, x24, snake_body_colour@PAGEOFF
-    ldr x24, [x24]
-
+    ldr x24, [x20, snake_colour_offset]
 
     // draw tail most cell
     mov w0, #2
@@ -580,6 +587,7 @@ struct Game {
     // draw
     bl _DrawRectangleV
 
+    // draw snake body (excluding head)
     b draw_body_loop_condition
 
     draw_body_loop:
@@ -661,7 +669,7 @@ struct Game {
     bl _DrawRectangleV
 
     bl _EndDrawing
-    ldp d8, d9, [sp], #0x10
+    ldp s8, s9, [sp], #0x10
 
     game_loop_condition:
         bl _WindowShouldClose

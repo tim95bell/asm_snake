@@ -56,17 +56,11 @@
     window_name: .asciz "ASM Snake"
     update_string: .asciz "update\n"
     draw_string: .asciz "draw with delta: %f\n"
-    key_pressed_string: .asciz "key pressed: %d\n"
-    up_string: .asciz "up\n"
-    right_string: .asciz "right\n"
-    down_string: .asciz "down\n"
-    left_string: .asciz "left\n"
     // ABGR (because little endian)
     clear_colour: .4byte 0xFF224466
     empty_cell_colour: .4byte 0xFFDDBB99
     apple_colour: .4byte 0xFF5533BB
     snake_body_colour: .4byte 0xFFAA22CC
-    snake_head_colour: .4byte 0xFFAA22FF
 
 .macro CALC_CELL_SIZE, result, scratch, cell_count_1d, board_size_1d, margin_divisor
     fmov \scratch, #1
@@ -99,6 +93,24 @@
     fsub \b, \b, \a
     // a = t * b' + a = t * (b - a) + a
     fmadd \a, \t, \b, \a
+.endm
+
+// update comparison flags for the direction moving. considering wrapping.
+// lt => negative direction (left or down)
+// eq => not moving in that dimension
+// gt => positive direction (right or up)
+// s_result: will contain result
+// s_scratch_1, s_scratch_2, and s_scratch_3: will be modified. can be equal to s_x and s_next_x, if they can be modified.
+// s_x and s_next_x: will not be modified, unless also passed as scratch. the value of the cell and the adjacent cell.
+.macro DIRECTION s_x, s_next_x, s_scratch_1, s_scratch_2, s_scratch_3
+    fsub \s_scratch_3, \s_x, \s_next_x
+    fabs \s_scratch_1, \s_scratch_3
+    fmov \s_scratch_2, #1
+    fcmp \s_scratch_1, \s_scratch_2
+    // if eq, flip sign
+    fneg \s_scratch_1, \s_scratch_3
+    fcsel \s_scratch_3, \s_scratch_1, \s_scratch_3, eq
+    fcmp \s_scratch_3, #0.0
 .endm
 
 /*
@@ -185,6 +197,7 @@ struct Game {
         // tail
         mov w0, #0
         strh w0, [x20, tail_offset]
+        /*
         // head
         mov w0, #1
         strh w0, [x20, head_offset]
@@ -206,8 +219,30 @@ struct Game {
         // body[1].y
         add x2, x2, #1
         strb w0, [x20, x2]
+        */
 
         // TODO(TB): remove this
+        // head
+        mov w0, #4
+        strh w0, [x20, head_offset]
+        // move direction
+        mov w0, RIGHT
+        strb w0, [x20, previous_move_direction_offset]
+        strb w0, [x20, move_direction_offset]
+        mov w0, #16
+        mov w1, #17
+        // body[0].x
+        mov x2, body_offset
+        strb w0, [x20, x2]
+        // body[0].y
+        add x2, x2, #1
+        strb w0, [x20, x2]
+        // body[1].x
+        add x2, x2, #1
+        strb w1, [x20, x2]
+        // body[1].y
+        add x2, x2, #1
+        strb w0, [x20, x2]
         add w1, w1, #1
         // body[2].x
         add x2, x2, #1
@@ -229,9 +264,6 @@ struct Game {
         // body[4].y
         add x2, x2, #1
         strb w0, [x20, x2]
-        // head
-        mov w0, #4
-        strh w0, [x20, head_offset]
 
         bl _GetTime
         fmov d8, d0 // last update time
@@ -470,6 +502,8 @@ struct Game {
 
     ldp d8, d9, [sp], #0x10
 
+    stp d8, d9, [sp, #-0x10]!
+
     // TODO(TB): will this clear the other bits in the x register?
     // w21 = head
     ldrh w21, [x20, head_offset]
@@ -479,9 +513,14 @@ struct Game {
     ldp s10, s11, [x20, cell_size_offset]
     // s11 = cell_size_plus_margin_size
     fadd s11, s11, s10
-    // s2 = board_x_offset
-    // s3 = board_y_offset
+    // s12 = board_x_offset
+    // s13 = board_y_offset
     ldp s12, s13, [x20, board_x_offset_offset]
+    // s14 = dt * cell_size
+    fcvt s9, d9
+    fmul s14, s9, s10
+    // s15 = (1 - dt) * cell_size
+    fsub s15, s10, s14
     // body
     add x23, x20, body_offset
 
@@ -490,83 +529,139 @@ struct Game {
     add x24, x24, snake_body_colour@PAGEOFF
     ldr x24, [x24]
 
-    cmp x21, x22
-    b.gt tail_before_head_body_loop_cond
 
-    head_before_tail:
-    // TODO(TB): implement drawing body when head is before tail
+    // draw tail most cell
+    mov w0, #2
+    mul w1, w0, w22
+    ldrb w2, [x23, x1]
+    // x_index
+    scvtf s0, w2
+    add w1, w1, #1
+    ldrb w2, [x23, x1]
+    // y_index
+    scvtf s1, w2
+    // increment tail
+    mov w1, BODY_CAPACITY
+    INC_CLAMP_ZERO_TO_N w22, w1
+    mul w1, w0, w22
+    ldrb w2, [x23, x1]
+    // next_x_index
+    scvtf s2, w2
+    add w1, w1, #1
+    ldrb w2, [x23, x1]
+    // next_y_index
+    scvtf s3, w2
 
-    b end_draw_snake_body
+    DIRECTION s0, s2, s2, s5, s6
+    // s4 = x_offset
+    fmov s7, wzr
+    fcsel s4, s14, s7, gt
+    // s2 = width_offset
+    fcsel s2, s14, s7, ne
 
-    tail_before_head_body_loop:
+    DIRECTION s1, s3, s3, s5, s6
+    // s5 = y_offset
+    fcsel s5, s14, s7, gt
+    // s3 = height_offset
+    fcsel s3, s14, s7, ne
+
+    // x
+    fmadd s0, s0, s11, s12
+    fadd s0, s0, s4
+    // y
+    fmadd s1, s1, s11, s13
+    fadd s1, s1, s5
+    // width
+    fsub s2, s10, s2
+    // height
+    fsub s3, s10, s3
+    // colour
+    mov x0, x24
+    // draw
+    bl _DrawRectangleV
+
+    b draw_body_loop_condition
+
+    draw_body_loop:
+        mov w0, #2
+        mul w0, w0, w22
+        ldrb w1, [x23, x0]
+        // x_index
+        scvtf s0, w1
+        add w0, w0, #1
+        ldrb w1, [x23, x0]
+        // y_index
+        scvtf s1, w1
+        // x
+        fmadd s0, s0, s11, s12
+        // y
+        fmadd s1, s1, s11, s13
+        // width
+        fmov s2, s10
+        // height
+        fmov s3, s10
         // colour
         mov x0, x24
-        // body_ptr
-        mov x1, x23
-        // index
-        mov x2, x22
-        // cell_size
-        fmov s0, s10
-        // cell_size_plus_margin_size
-        fmov s1, s11
-        // board_x_offset
-        fmov s2, s12
-        // board_y_offset
-        fmov s3, s13
-        bl draw_snake_cell
 
-    tail_before_head_body_loop_cond:
-        // tail += 1
-        add x22, x22, #1
-        cmp x21, x22
-        b.gt tail_before_head_body_loop
+        bl _DrawRectangleV
 
-    end_draw_snake_body:
+        mov w0, BODY_CAPACITY
+        INC_CLAMP_ZERO_TO_N w22, w0
+    draw_body_loop_condition:
+        cmp w22, w21
+        b.ne draw_body_loop
 
-    mov x3, #2
-    // prev_x_index
-    mov x4, BODY_CAPACITY
-    mov x0, x21
-    DEC_CLAMP_ZERO_TO_N x0, x4
-    mul x0, x0, x3
-    ldrb w1, [x23, x0]
-    scvtf s0, w1
-    add x0, x0, #1
-    // prev_y_index
-    ldrb w2, [x23, x0]
-    scvtf s1, w2
+    // draw head
+    mov w0, #2
+    mul w1, w0, w22
+    ldrb w2, [x23, x1]
     // x_index
-    mul x0, x21, x3
-    ldrb w1, [x23, x0]
-    scvtf s2, w1
-    add x0, x0, #1
+    scvtf s0, w2
+    add w1, w1, #1
+    ldrb w2, [x23, x1]
     // y_index
-    ldrb w2, [x23, x0]
+    scvtf s1, w2
+    mov w1, BODY_CAPACITY
+    DEC_CLAMP_ZERO_TO_N w22, w1
+    mul w1, w0, w22
+    ldrb w2, [x23, x1]
+    // prev_x_index
+    scvtf s2, w2
+    add w1, w1, #1
+    ldrb w2, [x23, x1]
+    // prev_y_index
     scvtf s3, w2
-    // prev_x_pos
+
+    DIRECTION s2, s0, s2, s4, s5
+    fmov s7, wzr
+    // x_offset
+    fcsel s2, s15, s7, lt
+    // width_offset
+    fcsel s4, s15, s7, ne
+
+    DIRECTION s3, s1, s3, s5, s6
+    // y_offset
+    fcsel s3, s15, s7, lt
+    // height_offset
+    fcsel s5, s15, s7, ne
+
+    // x
     fmadd s0, s0, s11, s12
-    // prev_y_pos
+    fadd s0, s0, s2
+    // y
     fmadd s1, s1, s11, s13
-    // x_pos
-    fmadd s2, s2, s11, s12
-    // y_pos
-    fmadd s3, s3, s11, s13
-    // x_pos
-    fcvt s4, d9
-    FLERP s0, s2, s4
-    // y_pos
-    FLERP s1, s3, s4
+    fadd s1, s1, s3
     // width
-    fmov s2, s10
+    fsub s2, s10, s4
     // height
-    fmov s3, s10
+    fsub s3, s10, s5
     // colour
-    adrp x0, snake_head_colour@PAGE
-    add x0, x0, snake_head_colour@PAGEOFF
-    ldr x0, [x0]
+    mov x0, x24
+    // draw
     bl _DrawRectangleV
 
     bl _EndDrawing
+    ldp d8, d9, [sp], #0x10
 
     game_loop_condition:
         bl _WindowShouldClose
@@ -584,35 +679,4 @@ struct Game {
         ldp x19, x20, [sp, #0x80]
         add sp, sp, STACK_FRAME_SIZE
         mov x0, xzr
-        ret
-
-    // x_colour, x_body_ptr, x_index
-    // s_cell_size, s_cell_size_plus_margin_size, s_x_offset, s_y_offset
-    draw_snake_cell:
-        stp fp, lr, [sp, #-0x10]!
-        mov fp, sp
-        mov x5, #2
-        mul x2, x2, x5
-        fmov s5, s2
-        fmov s6, s3
-        // width = cell_size
-        fmov s2, s0
-        // height = cell_size
-        fmov s3, s0
-        // s_cell_size_plus_margin_size
-        fmov s4, s1
-        // x_index
-        ldrb w3, [x1, x2]
-        scvtf s0, w3
-        add x2, x2, #1
-        // y_index
-        ldrb w4, [x1, x2]
-        scvtf s1, w4
-        // x_pos
-        fmadd s0, s0, s4, s5
-        // y_pos
-        fmadd s1, s1, s4, s6
-        // draw
-        bl _DrawRectangleV
-        ldp fp, lr, [sp], #0x10
         ret

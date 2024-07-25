@@ -34,12 +34,12 @@
 .equ LEFT_KEY_CODE, 263
 .equ INITIAL_WINDOW_WIDTH, 640
 .equ INITIAL_WINDOW_HEIGHT, 480
-// D_REGISTER_BACKUP_SIZE = 0x40
+// D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
 // GAME_STRUCT_SIZE = (8 + 8 + 8 + 8 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x83c
-// STACK_FRAME_SIZE = 0x8cc (round up to multiple of 0x10) = 0x8d0
-.equ STACK_FRAME_SIZE, 0x8d0
+// STACK_FRAME_SIZE = 0x8dc (round up to multiple of 0x10) = 0x8e0
+.equ STACK_FRAME_SIZE, 0x8e0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -101,7 +101,8 @@
 // eq => not moving in that dimension
 // gt => positive direction (right or up)
 // s_result: will contain result
-// s_scratch_1, s_scratch_2, and s_scratch_3: will be modified. can be equal to s_x and s_next_x, if they can be modified.
+// s_scratch_1, s_scratch_2: will be modified. can be equal to s_x and s_next_x, if they can be modified.
+// s_scratch_3: will be modified.
 // s_x and s_next_x: will not be modified, unless also passed as scratch. the value of the cell and the adjacent cell.
 .macro DIRECTION s_x, s_next_x, s_scratch_1, s_scratch_2, s_scratch_3
     fsub \s_scratch_3, \s_x, \s_next_x
@@ -138,6 +139,14 @@ struct Game {
 */
 
 .text
+    // NOTE(TB): in the main function, after initialisation, the following registers will have these associated values.
+    // tail, head, previous_move_direction, and move_direction are not ever read or written to memory (in the Game struct).
+    // x19 => Game struct pointer
+    // x20 => tail
+    // x21 => head
+    // x22 => previous_move_direction
+    // x23 => move_direction
+    // x24 => body
     _main:
         sub sp, sp, STACK_FRAME_SIZE
         stp fp, lr, [sp]
@@ -145,11 +154,12 @@ struct Game {
         stp d12, d13, [sp, #0x20]
         stp d10, d11, [sp, #0x30]
         stp d8, d9, [sp, #0x40]
-        stp x25, x26, [sp, #0x50]
-        stp x23, x24, [sp, #0x60]
-        stp x21, x22, [sp, #0x70]
-        stp x19, x20, [sp, #0x80]
-        add x20, sp, #0x90
+        stp x27, x28, [sp, #0x50]
+        stp x25, x26, [sp, #0x60]
+        stp x23, x24, [sp, #0x70]
+        stp x21, x22, [sp, #0x80]
+        stp x19, x20, [sp, #0x90]
+        add x19, sp, #0xa0
         mov fp, sp
 
         // create window
@@ -162,6 +172,8 @@ struct Game {
         cbz x0, done
 
         // init snake struct
+        // body
+        add x24, x19, body_offset
         // clear_colour and empty_cell_colour
         adrp x0, clear_colour@PAGE
         add x0, x0, clear_colour@PAGEOFF
@@ -169,7 +181,7 @@ struct Game {
         adrp x1, empty_cell_colour@PAGE
         add x1, x1, empty_cell_colour@PAGEOFF
         ldr x1, [x1]
-        stp x0, x1, [x20, clear_colour_offset]
+        stp x0, x1, [x19, clear_colour_offset]
         // apple_colour and snake_colour
         adrp x0, apple_colour@PAGE
         add x0, x0, apple_colour@PAGEOFF
@@ -177,7 +189,7 @@ struct Game {
         adrp x1, snake_colour@PAGE
         add x1, x1, snake_colour@PAGEOFF
         ldr x1, [x1]
-        stp x0, x1, [x20, apple_colour_offset]
+        stp x0, x1, [x19, apple_colour_offset]
 
         bl _GetScreenWidth
         scvtf s8, x0 // screen width (pixels)
@@ -214,135 +226,127 @@ struct Game {
         fdiv s15, s15, s0 // margin size
 
         // board_size_1d , board_x_offset
-        stp s10, s11, [x20, board_size_1d_offset]
+        stp s10, s11, [x19, board_size_1d_offset]
         // board_y_offset, cell_size
-        stp s12, s14, [x20, board_y_offset_offset]
+        stp s12, s14, [x19, board_y_offset_offset]
         // margin_size
-        str s15, [x20, margin_size_offset]
+        str s15, [x19, margin_size_offset]
         // tail
-        mov w0, #0
-        strh w0, [x20, tail_offset]
+        mov w20, #0
         /*
         // head
-        mov w0, #1
-        strh w0, [x20, head_offset]
+        mov w21, #1
+        // previous move direction
+        mov w22, RIGHT
         // move direction
-        mov w0, RIGHT
-        strb w0, [x20, previous_move_direction_offset]
-        strb w0, [x20, move_direction_offset]
+        mov w23, w22
         mov w0, #16
         mov w1, #17
         // body[0].x
         mov x2, body_offset
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         // body[0].y
         add x2, x2, #1
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         // body[1].x
         add x2, x2, #1
-        strb w1, [x20, x2]
+        strb w1, [x19, x2]
         // body[1].y
         add x2, x2, #1
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         */
 
         // TODO(TB): remove this
         // head
-        mov w0, #4
-        strh w0, [x20, head_offset]
+        mov w21, #4
+        // previous move direction
+        mov w22, RIGHT
         // move direction
-        mov w0, RIGHT
-        strb w0, [x20, previous_move_direction_offset]
-        strb w0, [x20, move_direction_offset]
+        mov w23, w22
         mov w0, #16
         mov w1, #17
         // body[0].x
         mov x2, body_offset
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         // body[0].y
         add x2, x2, #1
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         // body[1].x
         add x2, x2, #1
-        strb w1, [x20, x2]
+        strb w1, [x19, x2]
         // body[1].y
         add x2, x2, #1
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         add w1, w1, #1
         // body[2].x
         add x2, x2, #1
-        strb w1, [x20, x2]
+        strb w1, [x19, x2]
         // body[2].y
         add x2, x2, #1
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         add w0, w0, #1
         // body[3].x
         add x2, x2, #1
-        strb w1, [x20, x2]
+        strb w1, [x19, x2]
         // body[3].y
         add x2, x2, #1
-        strb w0, [x20, x2]
+        strb w0, [x19, x2]
         add w0, w0, #1
         // body[4].x
         add x2, x2, #1
-        strb w1, [x20, x2]
+        strb w1, [x19, x2]
         // body[4].y
         add x2, x2, #1
-        strb w0, [x20, x2]
-
-        bl _GetTime
-        fcvt s8, d0 // last update time
-        fmov s9, wzr
+        strb w0, [x19, x2]
 
         mov w0, #60
         bl _SetTargetFPS
 
+        bl _GetTime
+        fcvt s8, d0 // last update time
+        fmov s9, wzr // frame dt
+
         b draw
     game_loop:
         // handle input
-        mov w21, UP_KEY_CODE
-        mov w22, RIGHT_KEY_CODE
-        mov w23, DOWN_KEY_CODE
-        mov w24, LEFT_KEY_CODE
-        ldrb w25, [x20, previous_move_direction_offset]
+        mov w25, UP_KEY_CODE
+        mov w26, RIGHT_KEY_CODE
+        mov w27, DOWN_KEY_CODE
+        mov w28, LEFT_KEY_CODE
         b input_loop_cond
         input_loop:
-            cmp w0, w21
+            cmp w0, w25
             b.eq 1f
-            cmp w0, w22
+            cmp w0, w26
             b.eq 2f
-            cmp w0, w23
+            cmp w0, w27
             b.eq 3f
-            cmp w0, w24
+            cmp w0, w28
             b.eq 4f
             b 5f
             1: // up
-                cmp w25, DOWN
+                cmp w22, DOWN
                 b.eq 5f
 
-                mov w0, UP
-                strb w0, [x20, move_direction_offset]
+                mov w23, UP
                 b 5f
             2: // right
-                cmp w25, LEFT
+                cmp w22, LEFT
                 b.eq 5f
 
-                mov w0, RIGHT
-                strb w0, [x20, move_direction_offset]
+                mov w23, RIGHT
                 b 5f
             3: // down
-                cmp w25, UP
+                cmp w22, UP
                 b.eq 5f
 
-                mov w0, DOWN
-                strb w0, [x20, move_direction_offset]
+                mov w23, DOWN
                 b 5f
             4: // left
-                cmp w25, RIGHT
+                cmp w22, RIGHT
                 b.eq 5f
 
-                mov w0, LEFT
-                strb w0, [x20, move_direction_offset]
+                mov w23, LEFT
             5: // done
 
         input_loop_cond:
@@ -358,87 +362,76 @@ struct Game {
         mov w0, TIME_STEP_S
         scvtf s10, w0
 
-        b update_loop_condition
+        fcmp s9, s10
+        b.le after_update_loop
+        // previous_move_direction = move_direction
+        mov w22, w23
+        // x4 = body
+        add x4, x19, body_offset
         update_loop:
-            ldrb w0, [x20, move_direction_offset]
-            strb w0, [x20, previous_move_direction_offset]
-
-            // x21 = body
-            add x21, x20, body_offset
-            // w22 = head
-            ldrh w22, [x20, head_offset]
-            // w23 = move_direction
-            ldrb w23, [x20, move_direction_offset]
-            // w24 = index
+            // w1 = index
             mov w0, #2
-            mul w24, w22, w0
-            // w25 = x
-            ldrb w25, [x21, x24]
-            // w26 = y
-            add w24, w24, #1
-            ldrb w26, [x21, x24]
+            mul w1, w21, w0
+            // w5 = x
+            ldrb w5, [x4, x1]
+            // w6 = y
+            add w1, w1, #1
+            ldrb w6, [x4, x1]
 
-            // w24 = new head x index
-            mov w1, BODY_CAPACITY
-            mov w24, w22
-            INC_CLAMP_ZERO_TO_N w24, w1
-            mul w24, w24, w0
-
-            mov w0, #4
-            mul w23, w23, w0
-            adrp x1, jt@PAGE
-            add x1, x1, jt@PAGEOFF
-            add x1, x1, x23
+            mov w3, #4
+            mul w3, w23, w3
+            adrp x2, jt@PAGE
+            add x2, x2, jt@PAGEOFF
+            add x2, x2, x3
             // x0 = CELL_COUNT_1D
-            mov x0, CELL_COUNT_1D
-            br x1
+            mov x3, CELL_COUNT_1D
+            br x2
             jt:
                 b direction_up
                 b direction_right
                 b direction_down
                 b direction_left
             direction_up:
-                mov w1, w0
-                DEC_CLAMP_ZERO_TO_N w26, w1
+                DEC_CLAMP_ZERO_TO_N w6, w3
                 b direction_done
             direction_right:
-                mov w1, w0
-                INC_CLAMP_ZERO_TO_N w25, w1
+                INC_CLAMP_ZERO_TO_N w5, w3
                 b direction_done
             direction_down:
-                mov w1, w0
-                INC_CLAMP_ZERO_TO_N w26, w1
+                INC_CLAMP_ZERO_TO_N w6, w3
                 b direction_done
             direction_left:
-                mov w1, w0
-                DEC_CLAMP_ZERO_TO_N w25, w1
+                DEC_CLAMP_ZERO_TO_N w5, w3
             direction_done:
 
+            // w1 = new head x index
+            mov w2, BODY_CAPACITY
+            mov w1, w21
+            INC_CLAMP_ZERO_TO_N w1, w2
+            mul w1, w1, w0
+
             // update new head x and y in body
-            strb w25, [x21, x24]
-            add w24, w24, #1
-            strb w26, [x21, x24]
+            strb w5, [x4, x1]
+            add w1, w1, #1
+            strb w6, [x4, x1]
 
             // x0 = BODY_CAPACITY
             mov x0, BODY_CAPACITY
 
             // update head
             mov w1, w0
-            INC_CLAMP_ZERO_TO_N w22, w1
-            strh w22, [x20, head_offset]
+            INC_CLAMP_ZERO_TO_N w21, w1
 
             // TODO(TB): if NOT hit an apple
             // update tail
-            // w22 = tail
-            ldrh w22, [x20, tail_offset]
-            INC_CLAMP_ZERO_TO_N w22, w0
-            strh w22, [x20, tail_offset]
+            INC_CLAMP_ZERO_TO_N w20, w0
 
             fadd s8, s8, s10
             fsub s9, s9, s10
         update_loop_condition:
             fcmp s9, s10
             b.gt update_loop
+        after_update_loop:
 
         fdiv s9, s9, s10
 
@@ -446,11 +439,11 @@ struct Game {
         stp s8, s9, [sp, #-0x10]!
 
         bl _BeginDrawing
-        ldr x0, [x20, clear_colour_offset]
+        ldr x0, [x19, clear_colour_offset]
         bl _ClearBackground
 
         // cell colour
-        ldr x19, [x20, empty_cell_colour_offset]
+        ldr x28, [x19, empty_cell_colour_offset]
 
         // draw grid
         // s8 = board_cell_count_1d
@@ -464,9 +457,9 @@ struct Game {
         scvtf s0, wzr
         fmov s14, s0 // x_index
         // board_x_offset, board_y_offset
-        ldp s10, s11, [x20, board_x_offset_offset]
+        ldp s10, s11, [x19, board_x_offset_offset]
         // cell_size, margin_size
-        ldp s12, s13, [x20, cell_size_offset]
+        ldp s12, s13, [x19, cell_size_offset]
         // cell_size + margin_size
         fadd s13, s13, s12
         mov w0, CELL_COUNT_1D
@@ -492,7 +485,7 @@ struct Game {
             // height
             fmov s3, s12
             // colour
-            mov x0, x19
+            mov x0, x28
             // draw
             bl _DrawRectangleV
 
@@ -516,46 +509,41 @@ struct Game {
 
     stp s8, s9, [sp, #-0x10]!
 
-    // TODO(TB): will this clear the other bits in the x register?
-    // w21 = head
-    ldrh w21, [x20, head_offset]
-    // w22 = tail
-    ldrh w22, [x20, tail_offset]
+    // w25 = index = tail
+    mov w25, w20
     // s10 = cell_size
-    ldp s10, s11, [x20, cell_size_offset]
+    ldp s10, s11, [x19, cell_size_offset]
     // s11 = cell_size_plus_margin_size
     fadd s11, s11, s10
     // s12 = board_x_offset
     // s13 = board_y_offset
-    ldp s12, s13, [x20, board_x_offset_offset]
+    ldp s12, s13, [x19, board_x_offset_offset]
     // s14 = dt * cell_size
     fmul s14, s9, s10
     // s15 = (1 - dt) * cell_size
     fsub s15, s10, s14
-    // body
-    add x23, x20, body_offset
 
-    ldr x24, [x20, snake_colour_offset]
+    ldr x26, [x19, snake_colour_offset]
 
     // draw tail most cell
     mov w0, #2
-    mul w1, w0, w22
-    ldrb w2, [x23, x1]
+    mul w1, w0, w25
+    ldrb w2, [x24, x1]
     // x_index
     scvtf s0, w2
     add w1, w1, #1
-    ldrb w2, [x23, x1]
+    ldrb w2, [x24, x1]
     // y_index
     scvtf s1, w2
     // increment tail
     mov w1, BODY_CAPACITY
-    INC_CLAMP_ZERO_TO_N w22, w1
-    mul w1, w0, w22
-    ldrb w2, [x23, x1]
+    INC_CLAMP_ZERO_TO_N w25, w1
+    mul w1, w0, w25
+    ldrb w2, [x24, x1]
     // next_x_index
     scvtf s2, w2
     add w1, w1, #1
-    ldrb w2, [x23, x1]
+    ldrb w2, [x24, x1]
     // next_y_index
     scvtf s3, w2
 
@@ -583,7 +571,7 @@ struct Game {
     // height
     fsub s3, s10, s3
     // colour
-    mov x0, x24
+    mov x0, x26
     // draw
     bl _DrawRectangleV
 
@@ -592,12 +580,12 @@ struct Game {
 
     draw_body_loop:
         mov w0, #2
-        mul w0, w0, w22
-        ldrb w1, [x23, x0]
+        mul w0, w0, w25
+        ldrb w1, [x24, x0]
         // x_index
         scvtf s0, w1
         add w0, w0, #1
-        ldrb w1, [x23, x0]
+        ldrb w1, [x24, x0]
         // y_index
         scvtf s1, w1
         // x
@@ -609,34 +597,34 @@ struct Game {
         // height
         fmov s3, s10
         // colour
-        mov x0, x24
+        mov x0, x26
 
         bl _DrawRectangleV
 
         mov w0, BODY_CAPACITY
-        INC_CLAMP_ZERO_TO_N w22, w0
+        INC_CLAMP_ZERO_TO_N w25, w0
     draw_body_loop_condition:
-        cmp w22, w21
+        cmp w25, w21
         b.ne draw_body_loop
 
     // draw head
     mov w0, #2
-    mul w1, w0, w22
-    ldrb w2, [x23, x1]
+    mul w1, w0, w25
+    ldrb w2, [x24, x1]
     // x_index
     scvtf s0, w2
     add w1, w1, #1
-    ldrb w2, [x23, x1]
+    ldrb w2, [x24, x1]
     // y_index
     scvtf s1, w2
     mov w1, BODY_CAPACITY
-    DEC_CLAMP_ZERO_TO_N w22, w1
-    mul w1, w0, w22
-    ldrb w2, [x23, x1]
+    DEC_CLAMP_ZERO_TO_N w25, w1
+    mul w1, w0, w25
+    ldrb w2, [x24, x1]
     // prev_x_index
     scvtf s2, w2
     add w1, w1, #1
-    ldrb w2, [x23, x1]
+    ldrb w2, [x24, x1]
     // prev_y_index
     scvtf s3, w2
 
@@ -664,7 +652,7 @@ struct Game {
     // height
     fsub s3, s10, s5
     // colour
-    mov x0, x24
+    mov x0, x26
     // draw
     bl _DrawRectangleV
 
@@ -681,10 +669,11 @@ struct Game {
         ldp d12, d13, [sp, #0x20]
         ldp d10, d11, [sp, #0x30]
         ldp d8, d9, [sp, #0x40]
-        ldp x25, x26, [sp, #0x50]
-        ldp x23, x24, [sp, #0x60]
-        ldp x21, x22, [sp, #0x70]
-        ldp x19, x20, [sp, #0x80]
+        ldp x27, x28, [sp, #0x50]
+        ldp x25, x26, [sp, #0x60]
+        ldp x23, x24, [sp, #0x70]
+        ldp x21, x22, [sp, #0x80]
+        ldp x19, x20, [sp, #0x90]
         add sp, sp, STACK_FRAME_SIZE
         mov x0, xzr
         ret

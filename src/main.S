@@ -14,21 +14,17 @@
 .equ RIGHT, 1
 .equ DOWN, 2
 .equ LEFT, 3
-.equ CLEAR_COLOUR_OFFSET, 0
-.equ EMPTY_CELL_COLOUR_OFFSET, 8
-.equ APPLE_COLOUR_OFFSET, 16
-.equ SNAKE_COLOUR_OFFSET, 24
-.equ BOARD_SIZE_1D_OFFSET, 32
-.equ BOARD_X_POSITION_OFFSET, 36
-.equ BOARD_Y_POSITION_OFFSET, 40
-.equ CELL_SIZE_OFFSET, 44
-.equ MARGIN_SIZE_OFFSET, 48
-.equ LAST_UPDATE_TIME_OFFSET, 52
-.equ TAIL_OFFSET, 56
-.equ HEAD_OFFSET, 58
-.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 60
-.equ MOVE_DIRECTION_OFFSET, 61
-.equ BODY_OFFSET, 62
+.equ BOARD_SIZE_1D_OFFSET, 0
+.equ BOARD_X_POSITION_OFFSET, 4
+.equ BOARD_Y_POSITION_OFFSET, 8
+.equ CELL_SIZE_OFFSET, 12
+.equ MARGIN_SIZE_OFFSET, 16
+.equ LAST_UPDATE_TIME_OFFSET, 20
+.equ TAIL_OFFSET, 24
+.equ HEAD_OFFSET, 26
+.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 28
+.equ MOVE_DIRECTION_OFFSET, 29
+.equ BODY_OFFSET, 32
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -38,9 +34,9 @@
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (8 + 8 + 8 + 8 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x840
-// STACK_FRAME_SIZE = 0x8e0 (round up to multiple of 0x10) = 0x8f0
-.equ STACK_FRAME_SIZE, 0x8f0
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x820
+// STACK_FRAME_SIZE = 0x8c0 (round up to multiple of 0x10) = 0x8c0
+.equ STACK_FRAME_SIZE, 0x8c0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -58,16 +54,32 @@
 
 .data
     WINDOW_NAME: .asciz "ASM Snake"
-    // ABGR (because little endian)
-    CLEAR_COLOUR: .4byte 0xFF224466
-    EMPTY_CELL_COLOUR: .4byte 0xFFDDBB99
-    APPLE_COLOUR: .4byte 0xFF5533BB
-    SNAKE_COLOUR: .4byte 0xFFAA22CC
+
+.macro CREATE_COLOUR x_dest, ab, gr
+    movk \x_dest, \ab, lsl #0x10
+    movk \x_dest, \gr
+.endm
+
+.macro GET_CLEAR_COLOUR x_dest
+    CREATE_COLOUR \x_dest, #0xFF22, #0x4466
+.endm
+
+.macro GET_EMPTY_CELL_COLOUR x_dest
+    CREATE_COLOUR \x_dest, #0xFFDD, #0xBB99
+.endm
+
+.macro GET_APPLE_COLOUR x_dest
+    CREATE_COLOUR \x_dest, #0xFF55, #0x33BB
+.endm
+
+.macro GET_SNAKE_COLOUR x_dest
+    CREATE_COLOUR \x_dest, #0xFFAA, #0x22CC
+.endm
 
 // increment x, wrapping to keep in range [0, n)
 // result in x
 // n also modified
-.macro INC_CLAMP_ZERO_TO_N, x, n
+.macro INC_CLAMP_ZERO_TO_N x, n
     add \x, \x, #1
     subs \n, \x, \n
     csel \x, \x, \n, mi
@@ -76,7 +88,7 @@
 // decrement x, wrapping to keep in range [0, n)
 // result in x
 // n also modified
-.macro DEC_CLAMP_ZERO_TO_N, x, n
+.macro DEC_CLAMP_ZERO_TO_N x, n
     subs \x, \x, #1
     add \n, \n, \x
     csel \x, \n, \x, mi
@@ -102,10 +114,6 @@
 
 /*
 struct Game {
-    U64 clear_colour;
-    U64 empty_cell_colour;
-    U64 apple_colour;
-    U64 snake_colour;
     F32 board_size_1d; // pixels
     F32 board_x_position; // pixels
     F32 board_y_position; // pixels
@@ -162,22 +170,6 @@ struct Game {
         // init snake struct
         // body
         add x24, x19, BODY_OFFSET
-        // clear_colour and empty_cell_colour
-        adrp x0, CLEAR_COLOUR@PAGE
-        add x0, x0, CLEAR_COLOUR@PAGEOFF
-        ldr x0, [x0]
-        adrp x1, EMPTY_CELL_COLOUR@PAGE
-        add x1, x1, EMPTY_CELL_COLOUR@PAGEOFF
-        ldr x1, [x1]
-        stp x0, x1, [x19, CLEAR_COLOUR_OFFSET]
-        // apple_colour and snake_colour
-        adrp x0, APPLE_COLOUR@PAGE
-        add x0, x0, APPLE_COLOUR@PAGEOFF
-        ldr x0, [x0]
-        adrp x1, SNAKE_COLOUR@PAGE
-        add x1, x1, SNAKE_COLOUR@PAGEOFF
-        ldr x1, [x1]
-        stp x0, x1, [x19, APPLE_COLOUR_OFFSET]
 
         bl _GetScreenWidth
         scvtf s8, x0 // screen width (pixels)
@@ -429,11 +421,11 @@ struct Game {
 
     draw:
         bl _BeginDrawing
-        ldr x0, [x19, CLEAR_COLOUR_OFFSET]
+        GET_CLEAR_COLOUR x0
         bl _ClearBackground
 
         // cell colour
-        ldr x28, [x19, EMPTY_CELL_COLOUR_OFFSET]
+        GET_EMPTY_CELL_COLOUR x28
 
         // draw grid
         // s9 = x_coord
@@ -510,7 +502,7 @@ struct Game {
     // s15 = (1 - dt) * cell_size
     fsub s15, s10, s14
 
-    ldr x26, [x19, SNAKE_COLOUR_OFFSET]
+    GET_SNAKE_COLOUR x26
 
     // draw tail most cell
     mov w0, #2

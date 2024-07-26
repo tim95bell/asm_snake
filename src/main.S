@@ -14,21 +14,21 @@
 .equ RIGHT, 1
 .equ DOWN, 2
 .equ LEFT, 3
-.equ clear_colour_offset, 0
-.equ empty_cell_colour_offset, 8
-.equ apple_colour_offset, 16
-.equ snake_colour_offset, 24
-.equ board_size_1d_offset, 32
-.equ board_x_offset_offset, 36
-.equ board_y_offset_offset, 40
-.equ cell_size_offset, 44
-.equ margin_size_offset, 48
-.equ last_update_time_offset, 52
-.equ tail_offset, 56
-.equ head_offset, 58
-.equ previous_move_direction_offset, 60
-.equ move_direction_offset, 61
-.equ body_offset, 62
+.equ CLEAR_COLOUR_OFFSET, 0
+.equ EMPTY_CELL_COLOUR_OFFSET, 8
+.equ APPLE_COLOUR_OFFSET, 16
+.equ SNAKE_COLOUR_OFFSET, 24
+.equ BOARD_SIZE_1D_OFFSET, 32
+.equ BOARD_X_POSITION_OFFSET, 36
+.equ BOARD_Y_POSITION_OFFSET, 40
+.equ CELL_SIZE_OFFSET, 44
+.equ MARGIN_SIZE_OFFSET, 48
+.equ LAST_UPDATE_TIME_OFFSET, 52
+.equ TAIL_OFFSET, 56
+.equ HEAD_OFFSET, 58
+.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 60
+.equ MOVE_DIRECTION_OFFSET, 61
+.equ BODY_OFFSET, 62
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -57,20 +57,12 @@
 .extern _GetKeyPressed
 
 .data
-    window_name: .asciz "ASM Snake"
+    WINDOW_NAME: .asciz "ASM Snake"
     // ABGR (because little endian)
-    clear_colour: .4byte 0xFF224466
-    empty_cell_colour: .4byte 0xFFDDBB99
-    apple_colour: .4byte 0xFF5533BB
-    snake_colour: .4byte 0xFFAA22CC
-
-.macro CALC_CELL_SIZE, result, scratch, cell_count_1d, board_size_1d, margin_divisor
-    fmov \scratch, #1
-    fmadd \result, \margin_divisor, \cell_count_1d, \cell_count_1d
-    fsub \result, \result, \scratch
-    fdiv \result, \margin_divisor, \result
-    fmul \result, \result, \board_size_1d
-.endm
+    CLEAR_COLOUR: .4byte 0xFF224466
+    EMPTY_CELL_COLOUR: .4byte 0xFFDDBB99
+    APPLE_COLOUR: .4byte 0xFF5533BB
+    SNAKE_COLOUR: .4byte 0xFFAA22CC
 
 // increment x, wrapping to keep in range [0, n)
 // result in x
@@ -90,20 +82,12 @@
     csel \x, \n, \x, mi
 .endm
 
-.macro FLERP a, b, t
-    // b` = b - a
-    fsub \b, \b, \a
-    // a = t * b` + a = t * (b - a) + a
-    fmadd \a, \t, \b, \a
-.endm
-
 // update comparison flags for the direction moving. considering wrapping.
 // lt => negative direction (left or down)
 // eq => not moving in that dimension
 // gt => positive direction (right or up)
 // s_result: will contain result
-// s_scratch_1, s_scratch_2: will be modified. can be equal to s_x and s_next_x, if they can be modified.
-// s_scratch_3: will be modified.
+// s_scratch_1, s_scratch_2, scratch_3: will be modified. can be equal to s_x and s_next_x, if they can be modified.
 // s_x and s_next_x: will not be modified, unless also passed as scratch. the value of the cell and the adjacent cell.
 .macro DIRECTION s_x, s_next_x, s_scratch_1, s_scratch_2, s_scratch_3
     fsub \s_scratch_3, \s_x, \s_next_x
@@ -123,8 +107,8 @@ struct Game {
     U64 apple_colour;
     U64 snake_colour;
     F32 board_size_1d; // pixels
-    F32 board_x_offset; // pixels
-    F32 board_y_offset; // pixels
+    F32 board_x_position; // pixels
+    F32 board_y_position; // pixels
     F32 cell_size; // pixels
     F32 margin_size; // pixels
     F32 last_update_time; // seconds
@@ -169,31 +153,31 @@ struct Game {
         // create window
         mov x0, INITIAL_WINDOW_WIDTH
         mov x1, INITIAL_WINDOW_HEIGHT
-        adrp x2, window_name@PAGE
-        add x2, x2, window_name@PAGEOFF
+        adrp x2, WINDOW_NAME@PAGE
+        add x2, x2, WINDOW_NAME@PAGEOFF
         bl _InitWindow
         bl _IsWindowReady
         cbz x0, done
 
         // init snake struct
         // body
-        add x24, x19, body_offset
+        add x24, x19, BODY_OFFSET
         // clear_colour and empty_cell_colour
-        adrp x0, clear_colour@PAGE
-        add x0, x0, clear_colour@PAGEOFF
+        adrp x0, CLEAR_COLOUR@PAGE
+        add x0, x0, CLEAR_COLOUR@PAGEOFF
         ldr x0, [x0]
-        adrp x1, empty_cell_colour@PAGE
-        add x1, x1, empty_cell_colour@PAGEOFF
+        adrp x1, EMPTY_CELL_COLOUR@PAGE
+        add x1, x1, EMPTY_CELL_COLOUR@PAGEOFF
         ldr x1, [x1]
-        stp x0, x1, [x19, clear_colour_offset]
+        stp x0, x1, [x19, CLEAR_COLOUR_OFFSET]
         // apple_colour and snake_colour
-        adrp x0, apple_colour@PAGE
-        add x0, x0, apple_colour@PAGEOFF
+        adrp x0, APPLE_COLOUR@PAGE
+        add x0, x0, APPLE_COLOUR@PAGEOFF
         ldr x0, [x0]
-        adrp x1, snake_colour@PAGE
-        add x1, x1, snake_colour@PAGEOFF
+        adrp x1, SNAKE_COLOUR@PAGE
+        add x1, x1, SNAKE_COLOUR@PAGEOFF
         ldr x1, [x1]
-        stp x0, x1, [x19, apple_colour_offset]
+        stp x0, x1, [x19, APPLE_COLOUR_OFFSET]
 
         bl _GetScreenWidth
         scvtf s8, x0 // screen width (pixels)
@@ -221,20 +205,24 @@ struct Game {
         mov x0, MARGIN_DIVISOR
         scvtf s0, x0 // margin divisor
 
-        CALC_CELL_SIZE s14, s1, s13, s10, s0 // cell size (pixels)
+        // cell_size
+        fmov s1, #1
+        fmadd s14, s0, s13, s13
+        fsub s14, s14, s1
+        fdiv s14, s0, s14
+        fmul s14, s14, s10
 
-        // margin_size = (board_size_1d - (cell_count_1d * cell_size)) / (cell_count_1d - 1)
         fmsub s15, s13, s14, s10 // board_size_1d - (cell_count_1d * cell_size)
         fmov s1, #1
         fsub s0, s13, s1 // cell_count_1d - 1
         fdiv s15, s15, s0 // margin size
 
-        // board_size_1d , board_x_offset
-        stp s10, s11, [x19, board_size_1d_offset]
-        // board_y_offset, cell_size
-        stp s12, s14, [x19, board_y_offset_offset]
+        // board_size_1d , board_x_position
+        stp s10, s11, [x19, BOARD_SIZE_1D_OFFSET]
+        // board_y_position, cell_size
+        stp s12, s14, [x19, BOARD_Y_POSITION_OFFSET]
         // margin_size
-        str s15, [x19, margin_size_offset]
+        str s15, [x19, MARGIN_SIZE_OFFSET]
         // tail
         mov w20, #0
         /*
@@ -247,7 +235,7 @@ struct Game {
         mov w0, #16
         mov w1, #17
         // body[0].x
-        mov x2, body_offset
+        mov x2, BODY_OFFSET
         strb w0, [x19, x2]
         // body[0].y
         add x2, x2, #1
@@ -270,7 +258,7 @@ struct Game {
         mov w0, #16
         mov w1, #17
         // body[0].x
-        mov x2, body_offset
+        mov x2, BODY_OFFSET
         strb w0, [x19, x2]
         // body[0].y
         add x2, x2, #1
@@ -308,7 +296,7 @@ struct Game {
 
         bl _GetTime
         fcvt s0, d0 // last update time
-        str s0, [x19, last_update_time_offset]
+        str s0, [x19, LAST_UPDATE_TIME_OFFSET]
         fmov s8, wzr // frame dt
 
         b draw
@@ -358,7 +346,7 @@ struct Game {
             bl _GetKeyPressed
             cbnz w0, input_loop
 
-        ldr s9, [x19, last_update_time_offset]
+        ldr s9, [x19, LAST_UPDATE_TIME_OFFSET]
         // update
         bl _GetTime
         fcvt s0, d0
@@ -436,31 +424,31 @@ struct Game {
             fcmp s8, s10
             b.gt update_loop
 
-        str s9, [x19, last_update_time_offset]
+        str s9, [x19, LAST_UPDATE_TIME_OFFSET]
         fdiv s8, s8, s10
 
     draw:
         bl _BeginDrawing
-        ldr x0, [x19, clear_colour_offset]
+        ldr x0, [x19, CLEAR_COLOUR_OFFSET]
         bl _ClearBackground
 
         // cell colour
-        ldr x28, [x19, empty_cell_colour_offset]
+        ldr x28, [x19, EMPTY_CELL_COLOUR_OFFSET]
 
         // draw grid
         // s9 = x_coord
-        // s10 = board_x_offset
-        // s11 = board_y_offset
+        // s10 = board_x_position
+        // s11 = board_y_position
         // s12 = cell_size
         // s13 = cell_size + margin_size
         // s14 = x_index
         // s15 = y_index
         scvtf s0, wzr
         fmov s14, s0 // x_index
-        // board_x_offset, board_y_offset
-        ldp s10, s11, [x19, board_x_offset_offset]
+        // board_x_position, board_y_position
+        ldp s10, s11, [x19, BOARD_X_POSITION_OFFSET]
         // cell_size, margin_size
-        ldp s12, s13, [x19, cell_size_offset]
+        ldp s12, s13, [x19, CELL_SIZE_OFFSET]
         // cell_size + margin_size
         fadd s13, s13, s12
         b x_loop_cond
@@ -469,7 +457,7 @@ struct Game {
         scvtf s0, wzr
         fmov s15, s0 // y_index
         // s9 = x_coord (pixels)
-        fmadd s9, s14, s13, s10 // x_index * (cell_size + margin_size) + board_x_offset
+        fmadd s9, s14, s13, s10 // x_index * (cell_size + margin_size) + board_x_position
         b y_loop_cond
         y_loop:
             // x
@@ -477,7 +465,7 @@ struct Game {
 
             // y
             // s1 = y_coord (pixels)
-            fmadd s1, s15, s13, s11 // y_index * (cell_size + margin_size) + board_y_offset
+            fmadd s1, s15, s13, s11 // y_index * (cell_size + margin_size) + board_y_position
 
             // width
             fmov s2, s12
@@ -511,18 +499,18 @@ struct Game {
     // w25 = index = tail
     mov w25, w20
     // s10 = cell_size
-    ldp s10, s11, [x19, cell_size_offset]
+    ldp s10, s11, [x19, CELL_SIZE_OFFSET]
     // s11 = cell_size_plus_margin_size
     fadd s11, s11, s10
-    // s12 = board_x_offset
-    // s13 = board_y_offset
-    ldp s12, s13, [x19, board_x_offset_offset]
+    // s12 = board_x_position
+    // s13 = board_y_position
+    ldp s12, s13, [x19, BOARD_X_POSITION_OFFSET]
     // s14 = dt * cell_size
     fmul s14, s8, s10
     // s15 = (1 - dt) * cell_size
     fsub s15, s10, s14
 
-    ldr x26, [x19, snake_colour_offset]
+    ldr x26, [x19, SNAKE_COLOUR_OFFSET]
 
     // draw tail most cell
     mov w0, #2

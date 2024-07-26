@@ -8,8 +8,6 @@
 .equ BODY_CAPACITY, 1025
 // MARGIN_DIVISOR: margin_size = cell_size / MARGIN_DIVISOR
 .equ MARGIN_DIVISOR, 5
-// TIME_STEP_S: the time in seconds, that everything updates in the game by (since it has discrete steps)
-.equ TIME_STEP_S, 1
 .equ UP, 0
 .equ RIGHT, 1
 .equ DOWN, 2
@@ -20,11 +18,12 @@
 .equ CELL_SIZE_OFFSET, 12
 .equ MARGIN_SIZE_OFFSET, 16
 .equ LAST_UPDATE_TIME_OFFSET, 20
-.equ TAIL_OFFSET, 24
-.equ HEAD_OFFSET, 26
-.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 28
-.equ MOVE_DIRECTION_OFFSET, 29
-.equ BODY_OFFSET, 32
+.equ TIME_STEP_S_OFFSET, 24
+.equ TAIL_OFFSET, 28
+.equ HEAD_OFFSET, 30
+.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 32
+.equ MOVE_DIRECTION_OFFSET, 33
+.equ BODY_OFFSET, 36
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -34,9 +33,9 @@
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x820
-// STACK_FRAME_SIZE = 0x8c0 (round up to multiple of 0x10) = 0x8c0
-.equ STACK_FRAME_SIZE, 0x8c0
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x820
+// STACK_FRAME_SIZE = 0x8c4 (round up to multiple of 0x10) = 0x8d0
+.equ STACK_FRAME_SIZE, 0x8d0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -54,6 +53,8 @@
 
 .data
     WINDOW_NAME: .asciz "ASM Snake"
+    // TIME_STEP_S: the time in seconds, that everything updates in the game by (since it has discrete steps)
+    TIME_STEP_S: .float 0.2
 
 .macro CREATE_COLOUR x_dest, ab, gr
     movk \x_dest, \ab, lsl #0x10
@@ -120,6 +121,7 @@ struct Game {
     F32 cell_size; // pixels
     F32 margin_size; // pixels
     F32 last_update_time; // seconds
+    F32 time_step_s; // seconds
     // tail: index of head cell. multiply by 2 to get byte location
     U16 tail;
     // head: index of head cell. multiply by 2 to get byte location
@@ -168,6 +170,12 @@ struct Game {
         cbz x0, done
 
         // init snake struct
+        // time_step_s
+        adrp x0, TIME_STEP_S@PAGE
+        add x0, x0, TIME_STEP_S@PAGEOFF
+        ldr s0, [x0]
+        str s0, [x19, TIME_STEP_S_OFFSET]
+
         // body
         add x24, x19, BODY_OFFSET
 
@@ -345,8 +353,7 @@ struct Game {
         // s8 = time delta
         fsub s8, s0, s9
         // s10 = time step s
-        mov w0, TIME_STEP_S
-        scvtf s10, w0
+        ldr s10, [x19, TIME_STEP_S_OFFSET]
 
         b update_loop_condition
         // NOTE(TB): assume update_loop will almost never run more than once, and far more often zero times

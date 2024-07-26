@@ -23,11 +23,12 @@
 .equ board_y_offset_offset, 40
 .equ cell_size_offset, 44
 .equ margin_size_offset, 48
-.equ tail_offset, 52
-.equ head_offset, 54
-.equ previous_move_direction_offset, 56
-.equ move_direction_offset, 57
-.equ body_offset, 58
+.equ last_update_time_offset, 52
+.equ tail_offset, 56
+.equ head_offset, 58
+.equ previous_move_direction_offset, 60
+.equ move_direction_offset, 61
+.equ body_offset, 62
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -37,9 +38,9 @@
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (8 + 8 + 8 + 8 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x83c
-// STACK_FRAME_SIZE = 0x8dc (round up to multiple of 0x10) = 0x8e0
-.equ STACK_FRAME_SIZE, 0x8e0
+// GAME_STRUCT_SIZE = (8 + 8 + 8 + 8 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x840
+// STACK_FRAME_SIZE = 0x8e0 (round up to multiple of 0x10) = 0x8f0
+.equ STACK_FRAME_SIZE, 0x8f0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -126,6 +127,7 @@ struct Game {
     F32 board_y_offset; // pixels
     F32 cell_size; // pixels
     F32 margin_size; // pixels
+    F32 last_update_time; // seconds
     // tail: index of head cell. multiply by 2 to get byte location
     U16 tail;
     // head: index of head cell. multiply by 2 to get byte location
@@ -146,7 +148,9 @@ struct Game {
     // x21 => head
     // x22 => previous_move_direction
     // x23 => move_direction
+    // TODO(TB): no point having body in here realy
     // x24 => body
+    // s8 => frame dt
     _main:
         sub sp, sp, STACK_FRAME_SIZE
         stp fp, lr, [sp]
@@ -303,8 +307,9 @@ struct Game {
         bl _SetTargetFPS
 
         bl _GetTime
-        fcvt s8, d0 // last update time
-        fmov s9, wzr // frame dt
+        fcvt s0, d0 // last update time
+        str s0, [x19, last_update_time_offset]
+        fmov s8, wzr // frame dt
 
         b draw
     game_loop:
@@ -353,30 +358,29 @@ struct Game {
             bl _GetKeyPressed
             cbnz w0, input_loop
 
+        ldr s9, [x19, last_update_time_offset]
         // update
         bl _GetTime
         fcvt s0, d0
-        // s9 = time delta
-        fsub s9, s0, s8
+        // s8 = time delta
+        fsub s8, s0, s9
         // s10 = time step s
         mov w0, TIME_STEP_S
         scvtf s10, w0
 
-        fcmp s9, s10
-        b.le after_update_loop
-        // previous_move_direction = move_direction
-        mov w22, w23
-        // x4 = body
-        add x4, x19, body_offset
+        b update_loop_condition
+        // NOTE(TB): assume update_loop will almost never run more than once, and far more often zero times
         update_loop:
+            // previous_move_direction = move_direction
+            mov w22, w23
             // w1 = index
             mov w0, #2
             mul w1, w21, w0
             // w5 = x
-            ldrb w5, [x4, x1]
+            ldrb w5, [x24, x1]
             // w6 = y
             add w1, w1, #1
-            ldrb w6, [x4, x1]
+            ldrb w6, [x24, x1]
 
             mov w3, #4
             mul w3, w23, w3
@@ -411,9 +415,9 @@ struct Game {
             mul w1, w1, w0
 
             // update new head x and y in body
-            strb w5, [x4, x1]
+            strb w5, [x24, x1]
             add w1, w1, #1
-            strb w6, [x4, x1]
+            strb w6, [x24, x1]
 
             // x0 = BODY_CAPACITY
             mov x0, BODY_CAPACITY
@@ -426,18 +430,16 @@ struct Game {
             // update tail
             INC_CLAMP_ZERO_TO_N w20, w0
 
-            fadd s8, s8, s10
-            fsub s9, s9, s10
+            fadd s9, s9, s10
+            fsub s8, s8, s10
         update_loop_condition:
-            fcmp s9, s10
+            fcmp s8, s10
             b.gt update_loop
-        after_update_loop:
 
-        fdiv s9, s9, s10
+        str s9, [x19, last_update_time_offset]
+        fdiv s8, s8, s10
 
     draw:
-        stp s8, s9, [sp, #-0x10]!
-
         bl _BeginDrawing
         ldr x0, [x19, clear_colour_offset]
         bl _ClearBackground
@@ -446,7 +448,6 @@ struct Game {
         ldr x28, [x19, empty_cell_colour_offset]
 
         // draw grid
-        // s8 = board_cell_count_1d
         // s9 = x_coord
         // s10 = board_x_offset
         // s11 = board_y_offset
@@ -462,8 +463,6 @@ struct Game {
         ldp s12, s13, [x19, cell_size_offset]
         // cell_size + margin_size
         fadd s13, s13, s12
-        mov w0, CELL_COUNT_1D
-        scvtf s8, w0 // board cell count 1d
         b x_loop_cond
 
     x_loop:
@@ -494,7 +493,9 @@ struct Game {
             scvtf s0, w0
             fadd s15, s15, s0
         y_loop_cond:
-            fcmp s15, s8
+            mov w0, CELL_COUNT_1D
+            scvtf s0, w0
+            fcmp s15, s0
             b.lt y_loop
 
         // inc x_index
@@ -502,12 +503,10 @@ struct Game {
         scvtf s0, w0
         fadd s14, s14, s0
     x_loop_cond:
-        fcmp s14, s8
+        mov w0, CELL_COUNT_1D
+        scvtf s0, w0
+        fcmp s14, s0
         b.lt x_loop
-
-    ldp s8, s9, [sp], #0x10
-
-    stp s8, s9, [sp, #-0x10]!
 
     // w25 = index = tail
     mov w25, w20
@@ -519,7 +518,7 @@ struct Game {
     // s13 = board_y_offset
     ldp s12, s13, [x19, board_x_offset_offset]
     // s14 = dt * cell_size
-    fmul s14, s9, s10
+    fmul s14, s8, s10
     // s15 = (1 - dt) * cell_size
     fsub s15, s10, s14
 
@@ -657,7 +656,6 @@ struct Game {
     bl _DrawRectangleV
 
     bl _EndDrawing
-    ldp s8, s9, [sp], #0x10
 
     game_loop_condition:
         bl _WindowShouldClose

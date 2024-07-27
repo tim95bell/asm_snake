@@ -139,7 +139,7 @@
 //              used to hold BODY_CAPACITY, and to signal loop exit.
 //              will be modified.
 .macro CHECK_COLLISION i_x, i_y, i_ti, i_ti_end, i_tx, i_ty, i_body, i_scratch
-    mov w\i_scratch, BODY_CAPACITY
+    b 2f
     1:
         ldrb w\i_tx, [x\i_body, x\i_ti]
         add w\i_ti, w\i_ti, #1
@@ -150,18 +150,36 @@
         cmp w\i_tx, wzr
         // if collision, skip the rest of body loop, to the increment and re check_collision loop
         // else, increment and keep looping
-        b.eq 2f
+        b.eq 3f
 
         // no collision
 
         cmp w\i_scratch, BODY_CAPACITY
-        b.ne 2f
+        b.ne 3f
 
         INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch
+    2:
+        mov w\i_scratch, BODY_CAPACITY
         cmp w\i_ti, w\i_ti_end
         csel w\i_scratch, wzr, w\i_scratch, eq
         b 1b
-    2:
+    3:
+.endm
+
+// calculate snake length
+// i_result: will contain the result. can be i_tail or i_head, if they can be modified.
+//          will be modified.
+// i_tail: tail index.
+//          will NOT be modified.
+// i_head: head_index.
+//          will NOT be modified.
+// i_scratch: scratch.
+//          will be modified.
+.macro SNAKE_LENGTH i_result, i_tail, i_head, i_scratch
+    subs w\i_result, w\i_head, w\i_tail
+    add w\i_result, w\i_result, #1
+    add w\i_scratch, w\i_result, BODY_CAPACITY
+    csel w\i_result, w\i_scratch, w\i_result, mi
 .endm
 
 /*
@@ -462,6 +480,42 @@ struct Game {
 
             hit_apple_last_update_finish:
 
+            // check collision against self
+            SNAKE_LENGTH 0, 20, 21, 1
+            cmp w0, #4
+            b.le after_self_collision
+            // TODO(TB): if collided with an apple, could not have collided with self
+            mov w7, #2
+            // x2 = ti
+            mul x2, x20, x7
+            // x3 = ti_end
+            mov x3, x21
+            // TODO(TB): make DEC_CLAMP_ZERO_TO_N take an argument of how much to decrement (must be in range [0, n))
+            mov w4, BODY_CAPACITY
+            DEC_CLAMP_ZERO_TO_N w3, w4
+            mov w4, BODY_CAPACITY
+            DEC_CLAMP_ZERO_TO_N w3, w4
+            mov w4, BODY_CAPACITY
+            DEC_CLAMP_ZERO_TO_N w3, w4
+            mov w4, BODY_CAPACITY
+            DEC_CLAMP_ZERO_TO_N w3, w4
+            mul w3, w3, w7
+            add x6, x19, BODY_OFFSET
+            // w0 = head x
+            mul w0, w21, w7
+            // w1 = head y
+            add w1, w0, #1
+            ldrb w0, [x6, x0]
+            ldrb w1, [x6, x1]
+            CHECK_COLLISION 0, 1, 2, 3, 4, 5, 6, 7
+
+            b.ne after_self_collision
+            // self collision
+            fmov s0, #10.0
+            str s0, [x19, TIME_STEP_S_OFFSET]
+
+            after_self_collision:
+
             fadd s9, s9, s10
             fsub s8, s8, s10
         update_loop_condition:
@@ -744,10 +798,7 @@ struct Game {
         mov w6, w0
         mov w7, w1
         // w3 = snake_length
-        subs w3, w1, w0
-        add w3, w3, #1
-        add w4, w3, BODY_CAPACITY
-        csel w3, w4, w3, mi
+        SNAKE_LENGTH 3, 0, 1, 4
         // w4 = cell_count_2d
         mov w5, CELL_COUNT_1D
         mul w4, w5, w5

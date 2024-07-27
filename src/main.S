@@ -3,6 +3,7 @@
 .align 2
 
 // CELL_COUNT_1D: amount of cells in a single dimension. The grid is a square, so this is both the rows and cols.
+//      must be a power of 2
 .equ CELL_COUNT_1D, 32
 // BODY_CAPACITY: ((CELL_COUNT_1D * CELL_COUNT_1D) + 1)
 .equ BODY_CAPACITY, 1025
@@ -116,6 +117,53 @@
     fcmp \s_scratch_3, #0.0
 .endm
 
+// TODO(TB): change to use an index instead of byte index, it is confusing
+// TODO(TB): make a simpler macro that just checks collision of a single index, instead of all indices in a range
+// check for collions between the specified x and y indices, and the specified sections of the snake body.
+// after calling, the result flags give the result:
+//              eq => collision
+//              ne => no collision
+// i_x, i_y: x and y indices to check against collision with specified sections of snake body.
+//              will NOT be modified.
+// i_ti: starting byte index into snake body to check collisions against.
+//              byte index not index.
+//              will be modified.
+// i_ti_end: ending byte index (inclusive) into snake body to check collisions against.
+//              byte index not index.
+//              will NOT be modified.
+// i_tx, i_ty: to be used as test x and y indices.
+//              will be modified.
+// i_body: snake body pointer.
+//              will NOT be modified.
+// i_scratch: scratch buffer.
+//              used to hold BODY_CAPACITY, and to signal loop exit.
+//              will be modified.
+.macro CHECK_COLLISION i_x, i_y, i_ti, i_ti_end, i_tx, i_ty, i_body, i_scratch
+    mov w\i_scratch, BODY_CAPACITY
+    1:
+        ldrb w\i_tx, [x\i_body, x\i_ti]
+        add w\i_ti, w\i_ti, #1
+        ldrb w\i_ty, [x\i_body, x\i_ti]
+        sub w\i_tx, w\i_x, w\i_tx
+        sub w\i_ty, w\i_y, w\i_ty
+        orr w\i_tx, w\i_tx, w\i_ty
+        cmp w\i_tx, wzr
+        // if collision, skip the rest of body loop, to the increment and re check_collision loop
+        // else, increment and keep looping
+        b.eq 2f
+
+        // no collision
+
+        cmp w\i_scratch, BODY_CAPACITY
+        b.ne 2f
+
+        INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch
+        cmp w\i_ti, w\i_ti_end
+        csel w\i_scratch, wzr, w\i_scratch, eq
+        b 1b
+    2:
+.endm
+
 /*
 struct Game {
     F32 board_size_1d; // pixels
@@ -147,8 +195,7 @@ struct Game {
     // x21 => head
     // x22 => previous_move_direction
     // x23 => move_direction
-    // TODO(TB): no point having body in here realy
-    // x24 => body
+    // w24 => hit apple
     // s8 => frame dt
     _main:
         sub sp, sp, STACK_FRAME_SIZE
@@ -180,9 +227,6 @@ struct Game {
         add x0, x0, TIME_STEP_S@PAGEOFF
         ldr s0, [x0]
         str s0, [x19, TIME_STEP_S_OFFSET]
-
-        // body
-        add x24, x19, BODY_OFFSET
 
         bl _GetScreenWidth
         scvtf s8, x0 // screen width (pixels)
@@ -230,72 +274,30 @@ struct Game {
         str s15, [x19, MARGIN_SIZE_OFFSET]
         // tail
         mov w20, #0
-        /*
         // head
         mov w21, #1
         // previous move direction
         mov w22, RIGHT
         // move direction
         mov w23, w22
-        mov w0, #16
-        mov w1, #17
-        // body[0].x
-        mov x2, BODY_OFFSET
-        strb w0, [x19, x2]
-        // body[0].y
-        add x2, x2, #1
-        strb w0, [x19, x2]
-        // body[1].x
-        add x2, x2, #1
-        strb w1, [x19, x2]
-        // body[1].y
-        add x2, x2, #1
-        strb w0, [x19, x2]
-        */
+        add x2, x19, BODY_OFFSET
+        mov w0, #4
+        mov w1, #4
+        mov x3, xzr
 
-        // TODO(TB): remove this
-        // head
-        mov w21, #4
-        // previous move direction
-        mov w22, RIGHT
-        // move direction
-        mov w23, w22
-        mov w0, #16
-        mov w1, #17
         // body[0].x
-        mov x2, BODY_OFFSET
-        strb w0, [x19, x2]
+        strb w0, [x2, x3]
         // body[0].y
-        add x2, x2, #1
-        strb w1, [x19, x2]
+        add x3, x3, #1
+        strb w1, [x2, x3]
+
+        add w0, w0, #1
         // body[1].x
-        add x2, x2, #1
-        add w0, w0, #1
-        strb w0, [x19, x2]
+        add x3, x3, #1
+        strb w0, [x2, x3]
         // body[1].y
-        add x2, x2, #1
-        strb w1, [x19, x2]
-        // body[2].x
-        add x2, x2, #1
-        strb w0, [x19, x2]
-        // body[2].y
-        add x2, x2, #1
-        add w1, w1, #1
-        strb w1, [x19, x2]
-        // body[3].x
-        add x2, x2, #1
-        add w0, w0, #1
-        strb w0, [x19, x2]
-        // body[3].y
-        add x2, x2, #1
-        strb w1, [x19, x2]
-        // body[4].x
-        add x2, x2, #1
-        add w0, w0, #1
-        strb w0, [x19, x2]
-        // body[4].y
-        add x2, x2, #1
-        strb w1, [x19, x2]
+        add x3, x3, #1
+        strb w1, [x2, x3]
 
         mov w0, w20
         mov w1, w21
@@ -309,6 +311,8 @@ struct Game {
         fcvt s0, d0 // last update time
         str s0, [x19, LAST_UPDATE_TIME_OFFSET]
         fmov s8, wzr // frame dt
+
+        mov w24, 0
 
         b draw
     game_loop:
@@ -369,16 +373,17 @@ struct Game {
         b update_loop_condition
         // NOTE(TB): assume update_loop will almost never run more than once, and far more often zero times
         update_loop:
+            add x7, x19, BODY_OFFSET
             // previous_move_direction = move_direction
             mov w22, w23
             // w1 = index
             mov w0, #2
             mul w1, w21, w0
             // w5 = x
-            ldrb w5, [x24, x1]
+            ldrb w5, [x7, x1]
             // w6 = y
             add w1, w1, #1
-            ldrb w6, [x24, x1]
+            ldrb w6, [x7, x1]
 
             mov w3, #4
             mul w3, w23, w3
@@ -413,20 +418,49 @@ struct Game {
             mul w1, w1, w0
 
             // update new head x and y in body
-            strb w5, [x24, x1]
+            strb w5, [x7, x1]
             add w1, w1, #1
-            strb w6, [x24, x1]
+            strb w6, [x7, x1]
 
             // x0 = BODY_CAPACITY
             mov x0, BODY_CAPACITY
 
             // update head
             mov w1, w0
+            // w21 = head
             INC_CLAMP_ZERO_TO_N w21, w1
 
-            // TODO(TB): if NOT hit an apple
+            cbnz w24, hit_apple_last_update
+
+            // check collision between new head and apple
+            // w0 = apple x
+            ldrh w0, [x19, APPLE_X_OFFSET]
+            // w1 = apple y
+            ldrh w1, [x19, APPLE_Y_OFFSET]
+            // w2 = head byte index (start index)
+            mov w3, #2
+            mul w2, w21, w3
+            // w3 = head byte index (end index)
+            mov w3, w2
+            CHECK_COLLISION 0, 1, 2, 3, 4, 5, 7, 6
+            mov w0, #1
+            csel w24, w0, wzr, eq
             // update tail
+            mov x0, BODY_CAPACITY
             INC_CLAMP_ZERO_TO_N w20, w0
+
+            b hit_apple_last_update_finish
+
+            hit_apple_last_update:
+                // reset hit apple flag
+                mov w24, 0
+                // place apple
+                mov w0, w20
+                mov w1, w21
+                mov x2, x19
+                bl place_apple
+
+            hit_apple_last_update_finish:
 
             fadd s9, s9, s10
             fsub s8, s8, s10
@@ -540,25 +574,29 @@ struct Game {
 
     GET_SNAKE_COLOUR x26
 
+    add x7, x19, BODY_OFFSET
+    // skip drawing tail most cell as lerped if an apple was hit last update
+    cbnz w24, after_draw_tail_most_cell
+
     // draw tail most cell
     mov w0, #2
     mul w1, w0, w25
-    ldrb w2, [x24, x1]
+    ldrb w2, [x7, x1]
     // x_index
     scvtf s0, w2
     add w1, w1, #1
-    ldrb w2, [x24, x1]
+    ldrb w2, [x7, x1]
     // y_index
     scvtf s1, w2
     // increment tail
     mov w1, BODY_CAPACITY
     INC_CLAMP_ZERO_TO_N w25, w1
     mul w1, w0, w25
-    ldrb w2, [x24, x1]
+    ldrb w2, [x7, x1]
     // next_x_index
     scvtf s2, w2
     add w1, w1, #1
-    ldrb w2, [x24, x1]
+    ldrb w2, [x7, x1]
     // next_y_index
     scvtf s3, w2
 
@@ -590,17 +628,20 @@ struct Game {
     // draw
     bl _DrawRectangleV
 
+    after_draw_tail_most_cell:
+
     // draw snake body (excluding head)
+    add x27, x19, BODY_OFFSET
     b draw_body_loop_condition
 
     draw_body_loop:
         mov w0, #2
         mul w0, w0, w25
-        ldrb w1, [x24, x0]
+        ldrb w1, [x27, x0]
         // x_index
         scvtf s0, w1
         add w0, w0, #1
-        ldrb w1, [x24, x0]
+        ldrb w1, [x27, x0]
         // y_index
         scvtf s1, w1
         // x
@@ -625,21 +666,21 @@ struct Game {
     // draw head
     mov w0, #2
     mul w1, w0, w25
-    ldrb w2, [x24, x1]
+    ldrb w2, [x27, x1]
     // x_index
     scvtf s0, w2
     add w1, w1, #1
-    ldrb w2, [x24, x1]
+    ldrb w2, [x27, x1]
     // y_index
     scvtf s1, w2
     mov w1, BODY_CAPACITY
     DEC_CLAMP_ZERO_TO_N w25, w1
     mul w1, w0, w25
-    ldrb w2, [x24, x1]
+    ldrb w2, [x27, x1]
     // prev_x_index
     scvtf s2, w2
     add w1, w1, #1
-    ldrb w2, [x24, x1]
+    ldrb w2, [x27, x1]
     // prev_y_index
     scvtf s3, w2
 
@@ -737,31 +778,10 @@ struct Game {
         lsl w5, w5, #1
         lsl w6, w6, #1
         lsl w7, w7, #1
-        mov w21, BODY_CAPACITY
         check_collision:
             mov w2, w6
-            b body_loop
-            body_loop:
-                ldrb w3, [x20, x2]
-                add w2, w2, #1
-                ldrb w4, [x20, x2]
-                sub w3, w0, w3
-                sub w4, w1, w4
-                orr w3, w3, w4
-                cmp w3, wzr
-                // if collision, skip the rest of body loop, to the increment and re check_collision loop
-                // else, increment and keep looping
-                b.eq check_collision_increment
-
-                // no collision
-
-                cbz w21, check_collision_done
-
-                mov w4, w21
-                INC_CLAMP_ZERO_TO_N w2, w4
-                cmp w2, w7
-                csel w21, wzr, w21, eq
-                b body_loop
+            CHECK_COLLISION 0, 1, 2, 7, 3, 4, 20, 21
+            b.ne check_collision_done
         check_collision_increment:
             mov w3, w21
             INC_CLAMP_ZERO_TO_N w0, w3

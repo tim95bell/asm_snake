@@ -21,9 +21,11 @@
 .equ TIME_STEP_S_OFFSET, 24
 .equ TAIL_OFFSET, 28
 .equ HEAD_OFFSET, 30
-.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 32
-.equ MOVE_DIRECTION_OFFSET, 33
-.equ BODY_OFFSET, 36
+.equ APPLE_X_OFFSET, 32
+.equ APPLE_Y_OFFSET, 34
+.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 36
+.equ MOVE_DIRECTION_OFFSET, 37
+.equ BODY_OFFSET, 38
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -33,8 +35,8 @@
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x820
-// STACK_FRAME_SIZE = 0x8c4 (round up to multiple of 0x10) = 0x8d0
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x828
+// STACK_FRAME_SIZE = 0x8c8 (round up to multiple of 0x10) = 0x8d0
 .equ STACK_FRAME_SIZE, 0x8d0
 
 .extern _InitWindow
@@ -50,6 +52,7 @@
 .extern _GetTime
 .extern _SetTargetFPS
 .extern _GetKeyPressed
+.extern _GetRandomValue
 
 .data
     WINDOW_NAME: .asciz "ASM Snake"
@@ -126,6 +129,8 @@ struct Game {
     U16 tail;
     // head: index of head cell. multiply by 2 to get byte location
     U16 head;
+    U16 apple_x;
+    U16 apple_y;
     U8 previous_move_direction;
     U8 move_direction;
     // pairs of U8 for x, y coordinates.
@@ -262,34 +267,40 @@ struct Game {
         strb w0, [x19, x2]
         // body[0].y
         add x2, x2, #1
-        strb w0, [x19, x2]
+        strb w1, [x19, x2]
         // body[1].x
         add x2, x2, #1
-        strb w1, [x19, x2]
+        add w0, w0, #1
+        strb w0, [x19, x2]
         // body[1].y
         add x2, x2, #1
-        strb w0, [x19, x2]
-        add w1, w1, #1
+        strb w1, [x19, x2]
         // body[2].x
         add x2, x2, #1
-        strb w1, [x19, x2]
+        strb w0, [x19, x2]
         // body[2].y
         add x2, x2, #1
-        strb w0, [x19, x2]
-        add w0, w0, #1
+        add w1, w1, #1
+        strb w1, [x19, x2]
         // body[3].x
         add x2, x2, #1
-        strb w1, [x19, x2]
+        add w0, w0, #1
+        strb w0, [x19, x2]
         // body[3].y
         add x2, x2, #1
-        strb w0, [x19, x2]
-        add w0, w0, #1
+        strb w1, [x19, x2]
         // body[4].x
         add x2, x2, #1
-        strb w1, [x19, x2]
+        add w0, w0, #1
+        strb w0, [x19, x2]
         // body[4].y
         add x2, x2, #1
-        strb w0, [x19, x2]
+        strb w1, [x19, x2]
+
+        mov w0, w20
+        mov w1, w21
+        mov x2, x19
+        bl place_apple
 
         mov w0, #60
         bl _SetTargetFPS
@@ -495,6 +506,24 @@ struct Game {
         fcmp s14, s0
         b.lt x_loop
 
+    // draw apple
+    // x position
+    ldrh w0, [x19, APPLE_X_OFFSET]
+    scvtf s0, w0
+    fmadd s0, s0, s13, s10
+    // y position
+    ldrh w1, [x19, APPLE_Y_OFFSET]
+    scvtf s1, w1
+    fmadd s1, s1, s13, s11
+    // width
+    fmov s2, s12
+    // height
+    fmov s3, s12
+    // colour
+    GET_APPLE_COLOUR x0
+    // draw
+    bl _DrawRectangleV
+
     // w25 = index = tail
     mov w25, w20
     // s10 = cell_size
@@ -661,4 +690,95 @@ struct Game {
         ldp x19, x20, [sp, #0x90]
         add sp, sp, STACK_FRAME_SIZE
         mov x0, xzr
+        ret
+
+    // w0 => tail
+    // w1 => head
+    // x2 => Game struct pointer
+    place_apple:
+        stp fp, lr, [sp, #-0x30]!
+        stp x21, x22, [sp, #0x10]
+        stp x19, x20, [sp, #0x20]
+        mov fp, sp
+        mov w6, w0
+        mov w7, w1
+        // w3 = snake_length
+        subs w3, w1, w0
+        add w3, w3, #1
+        add w4, w3, BODY_CAPACITY
+        csel w3, w4, w3, mi
+        // w4 = cell_count_2d
+        mov w5, CELL_COUNT_1D
+        mul w4, w5, w5
+        // w1 = cell_count_2d - snake_length
+        sub w1, w4, w3
+        mov w0, wzr
+        bl _GetRandomValue
+        // w1 = y = index / cell_count_1d
+        udiv w1, w0, w5
+        // w0 = x = index % cell_count_1d
+        sub w5, w5, #1
+        and w0, w0, w5
+
+        // w0 = x_index
+        // w1 = y_index
+        // w2 = body byte index
+        // w3 = body test x index
+        // w4 = body test y index
+        // w5 = CELL_COUNT_1D * 2
+        // w6 = tail byte index (tail multipled by 2)
+        // w7 = head byte index (head multipled by 2)
+        // x19 = game struct pointer
+        // x20 = body pointer
+        // w21 = BODY_CAPACITY
+        mov x19, x2
+        add x20, x19, BODY_OFFSET
+        mov w5, CELL_COUNT_1D
+        lsl w5, w5, #1
+        lsl w6, w6, #1
+        lsl w7, w7, #1
+        mov w21, BODY_CAPACITY
+        check_collision:
+            mov w2, w6
+            b body_loop
+            body_loop:
+                ldrb w3, [x20, x2]
+                add w2, w2, #1
+                ldrb w4, [x20, x2]
+                sub w3, w0, w3
+                sub w4, w1, w4
+                orr w3, w3, w4
+                cmp w3, wzr
+                // if collision, skip the rest of body loop, to the increment and re check_collision loop
+                // else, increment and keep looping
+                b.eq check_collision_increment
+
+                // no collision
+
+                cbz w21, check_collision_done
+
+                mov w4, w21
+                INC_CLAMP_ZERO_TO_N w2, w4
+                cmp w2, w7
+                csel w21, wzr, w21, eq
+                b body_loop
+        check_collision_increment:
+            mov w3, w21
+            INC_CLAMP_ZERO_TO_N w0, w3
+            // TODO(TB): make version of INC_CLAMP_ZERO_TO_N that sets condition flags?
+            cmp w0, wzr
+            mov w3, w21
+            mov w4, w1
+            INC_CLAMP_ZERO_TO_N w4, w3
+            csel w1, w4, w1, eq
+            b check_collision
+
+        check_collision_done:
+
+        strh w0, [x19, APPLE_X_OFFSET]
+        strh w1, [x19, APPLE_Y_OFFSET]
+
+        ldp fp, lr, [sp], #0x10
+        ldp x21, x22, [sp], #0x10
+        ldp x19, x20, [sp], #0x10
         ret

@@ -9,6 +9,7 @@
 .equ BODY_CAPACITY, 1025
 // MARGIN_DIVISOR: margin_size = cell_size / MARGIN_DIVISOR
 .equ MARGIN_DIVISOR, 5
+.equ MIN_WINDOW_SIZE_1D, 200
 .equ UP, 0
 .equ RIGHT, 1
 .equ DOWN, 2
@@ -285,6 +286,16 @@ struct Game {
         bl _IsWindowReady
         cbz x0, done
 
+        mov w0, 0x00000004 //FLAG_WINDOW_RESIZABLE
+        bl _SetWindowState
+
+        mov w0, MIN_WINDOW_SIZE_1D
+        mov w1, MIN_WINDOW_SIZE_1D
+        bl _SetWindowMinSize
+
+        mov w0, #60
+        bl _SetTargetFPS
+
         // init snake struct
         // time_step_s
         adrp x0, TIME_STEP_S@PAGE
@@ -292,50 +303,8 @@ struct Game {
         ldr s0, [x0]
         str s0, [x19, TIME_STEP_S_OFFSET]
 
-        bl _GetScreenWidth
-        scvtf s8, x0 // screen width (pixels)
-
-        bl _GetScreenHeight
-        scvtf s9, x0 // screen height (pixels)
-
-        fmin s10, s8, s9 // board size 1d (pixels)
-
-        fsub s11, s8, s9
-        mov x0, #2
-        scvtf s0, x0
-        fdiv s11, s11, s0
-        scvtf s0, wzr
-        fmax s11, s11, s0 // board x offset (pixels)
-
-        fsub s12, s9, s8
-        fdiv s12, s12, s0
-
-        fmax s12, s12, s0 // board y offset (pixels)
-
-        mov x0, CELL_COUNT_1D
-        scvtf s13, x0 // board cell count 1d
-
-        mov x0, MARGIN_DIVISOR
-        scvtf s0, x0 // margin divisor
-
-        // cell_size
-        fmov s1, #1
-        fmadd s14, s0, s13, s13
-        fsub s14, s14, s1
-        fdiv s14, s0, s14
-        fmul s14, s14, s10
-
-        fmsub s15, s13, s14, s10 // board_size_1d - (cell_count_1d * cell_size)
-        fmov s1, #1
-        fsub s0, s13, s1 // cell_count_1d - 1
-        fdiv s15, s15, s0 // margin size
-
-        // board_size_1d , board_x_position
-        stp s10, s11, [x19, BOARD_SIZE_1D_OFFSET]
-        // board_y_position, cell_size
-        stp s12, s14, [x19, BOARD_Y_POSITION_OFFSET]
-        // margin_size
-        str s15, [x19, MARGIN_SIZE_OFFSET]
+        mov x0, x19
+        bl init_based_on_window_size
 
         INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3
 
@@ -343,9 +312,6 @@ struct Game {
         mov w1, w21
         mov x2, x19
         bl place_apple
-
-        mov w0, #60
-        bl _SetTargetFPS
 
         bl _GetTime
         fcvt s0, d0 // last update time
@@ -358,6 +324,12 @@ struct Game {
     game_loop:
 
     play:
+        bl _IsWindowResized
+        cbz w0, 1f
+            // window resized last frame
+            mov x0, x19
+            bl init_based_on_window_size
+        1:
         // handle input
         mov w25, UP_KEY_CODE
         mov w26, RIGHT_KEY_CODE
@@ -557,6 +529,12 @@ struct Game {
         b done
 
     game_over:
+        bl _IsWindowResized
+        cbz w0, 1f
+            // window resized last frame
+            mov x0, x19
+            bl init_based_on_window_size
+        1:
         // handle input
         b game_over_input_loop_cond
         game_over_input_loop:
@@ -916,4 +894,62 @@ struct Game {
         ldp fp, lr, [sp], #0x10
         ldp x21, x22, [sp], #0x10
         ldp x19, x20, [sp], #0x10
+        ret
+
+    // x0 => Game struct pointer
+    init_based_on_window_size:
+        stp fp, lr, [sp, #-0x30]!
+        stp x19, x20, [sp, #0x10]
+        stp d8, d9, [sp, #0x20]
+        mov fp, sp
+
+        mov x19, x0
+
+        bl _GetScreenWidth
+        scvtf s8, x0 // screen width (pixels)
+
+        bl _GetScreenHeight
+        scvtf s9, x0 // screen height (pixels)
+
+        fmin s0, s8, s9 // board size 1d (pixels)
+
+        fsub s1, s8, s9
+        mov x0, #2
+        scvtf s2, x0
+        fdiv s1, s1, s2
+        scvtf s4, wzr
+        fmax s1, s1, s4 // board x offset (pixels)
+
+        fsub s3, s9, s8
+        fdiv s3, s3, s2
+
+        fmax s3, s3, s4 // board y offset (pixels)
+
+        mov x0, CELL_COUNT_1D
+        scvtf s4, x0 // board cell count 1d
+
+        mov x0, MARGIN_DIVISOR
+        scvtf s2, x0 // margin divisor
+
+        // cell_size
+        fmov s7, #1
+        fmadd s5, s2, s4, s4
+        fsub s5, s5, s6
+        fdiv s5, s2, s5
+        fmul s5, s5, s0
+
+        fmsub s6, s4, s5, s0 // board_size_1d - (cell_count_1d * cell_size)
+        fsub s2, s4, s7 // cell_count_1d - 1
+        fdiv s6, s6, s2 // margin size
+
+        // board_size_1d , board_x_position
+        stp s0, s1, [x19, BOARD_SIZE_1D_OFFSET]
+        // board_y_position, cell_size
+        stp s3, s5, [x19, BOARD_Y_POSITION_OFFSET]
+        // margin_size
+        str s6, [x19, MARGIN_SIZE_OFFSET]
+
+        ldp fp, lr, [sp], #0x10
+        ldp x19, x20, [sp], #0x10
+        ldp d8, d9, [sp], #0x10
         ret

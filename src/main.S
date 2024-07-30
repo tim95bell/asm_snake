@@ -31,6 +31,8 @@
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
 .equ LEFT_KEY_CODE, 263
+.equ SPACEBAR_KEY_CODE, 32
+.equ ENTER_KEY_CODE, 257
 .equ INITIAL_WINDOW_WIDTH, 640
 .equ INITIAL_WINDOW_HEIGHT, 480
 // D_REGISTER_BACKUP_SIZE = 0x50
@@ -182,6 +184,50 @@
     csel w\i_result, w\i_scratch, w\i_result, mi
 .endm
 
+.macro INIT_SNAKE game_ptr, tail_out, head_out, previous_move_direction_out, move_direction_out, scratch_1, scratch_2, scratch_3, scratch_4
+        // tail
+        mov w\tail_out, #0
+        // head
+        mov w\head_out, #2
+        // previous move direction
+        mov w\previous_move_direction_out, RIGHT
+        // move direction
+        mov w\move_direction_out, w\previous_move_direction_out
+        add x\scratch_1, x\game_ptr, BODY_OFFSET
+        mov w\scratch_2, CELL_COUNT_1D
+        // CELL_COUNT_1D / 2
+        mov w\scratch_3, #2
+        // scratch_2 = y
+        udiv w\scratch_2, w\scratch_2, w\scratch_3
+        // scratch_3 = x
+        sub w\scratch_3, w\scratch_2, 2
+
+        // scratch_4 = index
+        mov x\scratch_4, xzr
+
+        // body[0].x
+        strb w\scratch_3, [x\scratch_1, x\scratch_4]
+        // body[0].y
+        add x\scratch_4, x\scratch_4, #1
+        strb w\scratch_2, [x\scratch_1, x\scratch_4]
+
+        add w\scratch_3, w\scratch_3, #1
+        // body[1].x
+        add x\scratch_4, x\scratch_4, #1
+        strb w\scratch_3, [x\scratch_1, x\scratch_4]
+        // body[1].y
+        add x\scratch_4, x\scratch_4, #1
+        strb w\scratch_2, [x\scratch_1, x\scratch_4]
+
+        add w\scratch_3, w\scratch_3, #1
+        // body[2].x
+        add x\scratch_4, x\scratch_4, #1
+        strb w\scratch_3, [x\scratch_1, x\scratch_4]
+        // body[2].y
+        add x\scratch_4, x\scratch_4, #1
+        strb w\scratch_2, [x\scratch_1, x\scratch_4]
+.endm
+
 /*
 struct Game {
     F32 board_size_1d; // pixels
@@ -290,32 +336,8 @@ struct Game {
         stp s12, s14, [x19, BOARD_Y_POSITION_OFFSET]
         // margin_size
         str s15, [x19, MARGIN_SIZE_OFFSET]
-        // tail
-        mov w20, #0
-        // head
-        mov w21, #1
-        // previous move direction
-        mov w22, RIGHT
-        // move direction
-        mov w23, w22
-        add x2, x19, BODY_OFFSET
-        mov w0, #4
-        mov w1, #4
-        mov x3, xzr
 
-        // body[0].x
-        strb w0, [x2, x3]
-        // body[0].y
-        add x3, x3, #1
-        strb w1, [x2, x3]
-
-        add w0, w0, #1
-        // body[1].x
-        add x3, x3, #1
-        strb w0, [x2, x3]
-        // body[1].y
-        add x3, x3, #1
-        strb w1, [x2, x3]
+        INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3
 
         mov w0, w20
         mov w1, w21
@@ -332,15 +354,17 @@ struct Game {
 
         mov w24, 0
 
-        b draw
+        b play_draw
     game_loop:
+
+    play:
         // handle input
         mov w25, UP_KEY_CODE
         mov w26, RIGHT_KEY_CODE
         mov w27, DOWN_KEY_CODE
         mov w28, LEFT_KEY_CODE
-        b input_loop_cond
-        input_loop:
+        b play_input_loop_cond
+        play_input_loop:
             cmp w0, w25
             b.eq 1f
             cmp w0, w26
@@ -375,9 +399,9 @@ struct Game {
                 mov w23, LEFT
             5: // done
 
-        input_loop_cond:
+        play_input_loop_cond:
             bl _GetKeyPressed
-            cbnz w0, input_loop
+            cbnz w0, play_input_loop
 
         ldr s9, [x19, LAST_UPDATE_TIME_OFFSET]
         // update
@@ -388,9 +412,9 @@ struct Game {
         // s10 = time step s
         ldr s10, [x19, TIME_STEP_S_OFFSET]
 
-        b update_loop_condition
+        b play_update_loop_condition
         // NOTE(TB): assume update_loop will almost never run more than once, and far more often zero times
-        update_loop:
+        play_update_loop:
             add x7, x19, BODY_OFFSET
             // previous_move_direction = move_direction
             mov w22, w23
@@ -509,24 +533,82 @@ struct Game {
             ldrb w1, [x6, x1]
             CHECK_COLLISION 0, 1, 2, 3, 4, 5, 6, 7
 
-            b.ne after_self_collision
-            // self collision
-            fmov s0, #10.0
-            str s0, [x19, TIME_STEP_S_OFFSET]
+            b.eq game_over
 
             after_self_collision:
 
             fadd s9, s9, s10
             fsub s8, s8, s10
-        update_loop_condition:
+        play_update_loop_condition:
             fcmp s8, s10
-            b.gt update_loop
+            b.gt play_update_loop
 
         str s9, [x19, LAST_UPDATE_TIME_OFFSET]
         fdiv s8, s8, s10
 
-    draw:
+    play_draw:
         bl _BeginDrawing
+        bl draw_main_game
+        bl _EndDrawing
+
+    play_condition:
+        bl _WindowShouldClose
+        cbz x0, play
+        b done
+
+    game_over:
+        // handle input
+        b game_over_input_loop_cond
+        game_over_input_loop:
+            subs w1, w0, SPACEBAR_KEY_CODE
+            sub w2, w0, ENTER_KEY_CODE
+            csel w0, w1, w2, eq
+            cbnz w0, game_over_input_loop_cond
+            // space or enter
+            INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3
+            fmov s8, #0.0
+            bl _GetTime
+            fcvt s0, d0
+            str s0, [x19, LAST_UPDATE_TIME_OFFSET]
+
+            mov w0, w20
+            mov w1, w21
+            mov x2, x19
+            bl place_apple
+            b play_draw
+
+        game_over_input_loop_cond:
+            bl _GetKeyPressed
+            cbnz w0, game_over_input_loop
+
+        bl _BeginDrawing
+        bl draw_main_game
+        bl _EndDrawing
+
+    game_over_condition:
+        bl _WindowShouldClose
+        cbz x0, game_over
+
+    done:
+        bl _CloseWindow
+        ldp fp, lr, [sp]
+        ldp d14, d15, [sp, #0x10]
+        ldp d12, d13, [sp, #0x20]
+        ldp d10, d11, [sp, #0x30]
+        ldp d8, d9, [sp, #0x40]
+        ldp x27, x28, [sp, #0x50]
+        ldp x25, x26, [sp, #0x60]
+        ldp x23, x24, [sp, #0x70]
+        ldp x21, x22, [sp, #0x80]
+        ldp x19, x20, [sp, #0x90]
+        add sp, sp, STACK_FRAME_SIZE
+        mov x0, xzr
+        ret
+
+    draw_main_game:
+        // TODO(TB): backup registers used
+        stp fp, lr, [sp, #-0x10]!
+        mov fp, sp
         GET_CLEAR_COLOUR x0
         bl _ClearBackground
 
@@ -766,26 +848,8 @@ struct Game {
     // draw
     bl _DrawRectangleV
 
-    bl _EndDrawing
-
-    game_loop_condition:
-        bl _WindowShouldClose
-        cbz x0, game_loop
-    done:
-        bl _CloseWindow
-        ldp fp, lr, [sp]
-        ldp d14, d15, [sp, #0x10]
-        ldp d12, d13, [sp, #0x20]
-        ldp d10, d11, [sp, #0x30]
-        ldp d8, d9, [sp, #0x40]
-        ldp x27, x28, [sp, #0x50]
-        ldp x25, x26, [sp, #0x60]
-        ldp x23, x24, [sp, #0x70]
-        ldp x21, x22, [sp, #0x80]
-        ldp x19, x20, [sp, #0x90]
-        add sp, sp, STACK_FRAME_SIZE
-        mov x0, xzr
-        ret
+    ldp fp, lr, [sp], #0x10
+    ret
 
     // w0 => tail
     // w1 => head

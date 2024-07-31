@@ -3,14 +3,14 @@
 .align 2
 
 // CELL_COUNT_1D: amount of cells in a single dimension. The grid is a square, so this is both the rows and cols.
-//      must be a power of 2
-.equ CELL_COUNT_1D, 32
-// BODY_CAPACITY: CELL_COUNT_1D * CELL_COUNT_1D
-.equ BODY_CAPACITY, 1024
-.equ BODY_CAPACITY_TIMES_2, 2048
+//      must be a power of 2 and <= 256
+.equ CELL_COUNT_1D, 8
 // MARGIN_DIVISOR: margin_size = cell_size / MARGIN_DIVISOR
-.equ MARGIN_DIVISOR, 5
+.equ MARGIN_DIVISOR, 50
 .equ MIN_WINDOW_SIZE_1D, 200
+.equ INITIAL_WINDOW_WIDTH, 640
+.equ INITIAL_WINDOW_HEIGHT, 480
+
 .equ UP, 0
 .equ RIGHT, 1
 .equ DOWN, 2
@@ -31,20 +31,20 @@
 .equ PREVIOUS_MOVE_DIRECTION_OFFSET, 44
 .equ MOVE_DIRECTION_OFFSET, 45
 .equ BODY_OFFSET, 46
+
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
 .equ LEFT_KEY_CODE, 263
 .equ SPACEBAR_KEY_CODE, 32
 .equ ENTER_KEY_CODE, 257
-.equ INITIAL_WINDOW_WIDTH, 640
-.equ INITIAL_WINDOW_HEIGHT, 480
+
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
 // GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x830
-// STACK_FRAME_SIZE = 0x8d0 (round up to multiple of 0x10) = 0x8e0
-.equ STACK_FRAME_SIZE, 0x8e0
+// STACK_FRAME_SIZE = 0x8d0 (round up to multiple of 0x10) = 0x8d0
+.equ STACK_FRAME_SIZE, 0x8d0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -143,10 +143,16 @@
 //              will be modified.
 // i_body: snake body pointer.
 //              will NOT be modified.
-// i_scratch: scratch buffer.
-//              used to hold BODY_CAPACITY, and to signal loop exit.
+// i_scratch_1: scratch buffer.
+//              used to hold CELL_COUNT_2D_TIMES_2.
+//              used to signal loop exit.
 //              will be modified.
-.macro CHECK_COLLISION i_x, i_y, i_ti, i_ti_end, i_tx, i_ty, i_body, i_scratch
+// i_scratch_2: scratch buffer.
+//              used to hold CELL_COUNT_2D_TIMES_2.
+//              will be modified.
+.macro CHECK_COLLISION i_x, i_y, i_ti, i_ti_end, i_tx, i_ty, i_body, i_scratch_1, i_scratch_2
+    GET_CELL_COUNT_2D w\i_scratch_2
+    lsl w\i_scratch_2, w\i_scratch_2, #1
     b 2f
     1:
         ldrb w\i_tx, [x\i_body, x\i_ti]
@@ -162,14 +168,13 @@
 
         // no collision
 
-        cmp w\i_scratch, BODY_CAPACITY_TIMES_2
+        cmp w\i_scratch_1, w\i_scratch_2
         b.ne 3f
 
-        INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch
+        INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch_1
     2:
-        mov w\i_scratch, BODY_CAPACITY_TIMES_2
         cmp w\i_ti, w\i_ti_end
-        csel w\i_scratch, wzr, w\i_scratch, eq
+        csel w\i_scratch_1, wzr, w\i_scratch_2, eq
         b 1b
     3:
 .endm
@@ -186,7 +191,8 @@
 .macro SNAKE_LENGTH i_result, i_tail, i_head, i_scratch
     subs w\i_result, w\i_head, w\i_tail
     add w\i_result, w\i_result, #1
-    add w\i_scratch, w\i_result, BODY_CAPACITY
+    GET_CELL_COUNT_2D w\i_scratch
+    add w\i_scratch, w\i_result, w\i_scratch
     csel w\i_result, w\i_scratch, w\i_result, mi
 .endm
 
@@ -246,6 +252,11 @@
         // body[2].y
         add x\scratch_4, x\scratch_4, #1
         strb w\scratch_2, [x\scratch_1, x\scratch_4]
+.endm
+
+.macro GET_CELL_COUNT_2D dest
+    mov \dest, CELL_COUNT_1D
+    mul \dest, \dest, \dest
 .endm
 
 /*
@@ -450,9 +461,10 @@ struct Game {
             direction_done:
 
             // w1 = new head x index
-            mov w2, BODY_CAPACITY
+            GET_CELL_COUNT_2D w2
+            mov w3, w2
             mov w1, w21
-            INC_CLAMP_ZERO_TO_N w1, w2
+            INC_CLAMP_ZERO_TO_N w1, w3
             mul w1, w1, w0
 
             // update new head x and y in body
@@ -460,11 +472,8 @@ struct Game {
             add w1, w1, #1
             strb w6, [x7, x1]
 
-            // x0 = BODY_CAPACITY
-            mov x0, BODY_CAPACITY
-
             // update head
-            mov w1, w0
+            mov w1, w2
             // w21 = head
             INC_CLAMP_ZERO_TO_N w21, w1
 
@@ -480,11 +489,11 @@ struct Game {
             mul w2, w21, w3
             // w3 = head byte index (end index)
             mov w3, w2
-            CHECK_COLLISION 0, 1, 2, 3, 4, 5, 7, 6
+            CHECK_COLLISION 0, 1, 2, 3, 4, 5, 7, 6, 9
             mov w0, #1
             csel w24, w0, wzr, eq
             // update tail
-            mov x0, BODY_CAPACITY
+            GET_CELL_COUNT_2D x0
             INC_CLAMP_ZERO_TO_N w20, w0
 
             b hit_apple_last_update_finish
@@ -498,7 +507,7 @@ struct Game {
                 mov x2, x19
                 bl place_apple
                 ldp s0, s1, [x19, MIN_TIME_STEP_S_OFFSET]
-                mov w2, BODY_CAPACITY
+                GET_CELL_COUNT_2D w2
                 scvtf s2, w2
                 SNAKE_LENGTH 3, 20, 21, 1
                 scvtf s3, w3
@@ -519,13 +528,14 @@ struct Game {
             // x3 = ti_end
             mov x3, x21
             // TODO(TB): make DEC_CLAMP_ZERO_TO_N take an argument of how much to decrement (must be in range [0, n))
-            mov w4, BODY_CAPACITY
+            GET_CELL_COUNT_2D w5
+            mov w4, w5
             DEC_CLAMP_ZERO_TO_N w3, w4
-            mov w4, BODY_CAPACITY
+            mov w4, w5
             DEC_CLAMP_ZERO_TO_N w3, w4
-            mov w4, BODY_CAPACITY
+            mov w4, w5
             DEC_CLAMP_ZERO_TO_N w3, w4
-            mov w4, BODY_CAPACITY
+            mov w4, w5
             DEC_CLAMP_ZERO_TO_N w3, w4
             mul w3, w3, w7
             add x6, x19, BODY_OFFSET
@@ -535,7 +545,7 @@ struct Game {
             add w1, w0, #1
             ldrb w0, [x6, x0]
             ldrb w1, [x6, x1]
-            CHECK_COLLISION 0, 1, 2, 3, 4, 5, 6, 7
+            CHECK_COLLISION 0, 1, 2, 3, 4, 5, 6, 7, 9
 
             b.eq game_over
 
@@ -735,7 +745,7 @@ struct Game {
     // y_index
     scvtf s1, w2
     // increment tail
-    mov w1, BODY_CAPACITY
+    GET_CELL_COUNT_2D w1
     INC_CLAMP_ZERO_TO_N w25, w1
     mul w1, w0, w25
     ldrb w2, [x7, x1]
@@ -803,7 +813,7 @@ struct Game {
 
         bl _DrawRectangleV
 
-        mov w0, BODY_CAPACITY
+        GET_CELL_COUNT_2D w0
         INC_CLAMP_ZERO_TO_N w25, w0
     draw_body_loop_condition:
         cmp w25, w21
@@ -819,7 +829,7 @@ struct Game {
     ldrb w2, [x27, x1]
     // y_index
     scvtf s1, w2
-    mov w1, BODY_CAPACITY
+    GET_CELL_COUNT_2D w1
     DEC_CLAMP_ZERO_TO_N w25, w1
     mul w1, w0, w25
     ldrb w2, [x27, x1]
@@ -898,14 +908,13 @@ struct Game {
         // w7 = head byte index (head multipled by 2)
         // x19 = game struct pointer
         // x20 = body pointer
-        // w21 = BODY_CAPACITY
         mov x19, x2
         add x20, x19, BODY_OFFSET
         lsl w6, w6, #1
         lsl w7, w7, #1
         check_collision:
             mov w2, w6
-            CHECK_COLLISION 0, 1, 2, 7, 3, 4, 20, 21
+            CHECK_COLLISION 0, 1, 2, 7, 3, 4, 20, 21, 9
             b.ne check_collision_done
         check_collision_increment:
             mov w3, CELL_COUNT_1D

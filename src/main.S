@@ -60,6 +60,9 @@
 .extern _SetTargetFPS
 .extern _GetKeyPressed
 .extern _GetRandomValue
+.extern _SetWindowState
+.extern _SetWindowMinSize
+.extern _IsWindowResized
 
 .data
     WINDOW_NAME: .asciz "ASM Snake"
@@ -89,22 +92,70 @@
     CREATE_COLOUR \x_dest, #0xFFAA, #0x22CC
 .endm
 
-// increment x, wrapping to keep in range [0, n)
-// result in x
-// n also modified
-.macro INC_CLAMP_ZERO_TO_N x, n
-    add \x, \x, #1
+// add m to x, wrapping to keep in range [0, n).
+// x: integer register to add to.
+//      must be in range [0, n)
+//      will be modified.
+//      will hold result.
+// n: integer register holding value to wrap at.
+//      will be modified.
+// m: integer immediate or register in range [0, n].
+//      will NOT be modified.
+// comparison flags:
+//      lt => no wrap
+//      ge => wrap
+.macro ADD_CLAMP_ZERO_TO_N x, n, m
+    add \x, \x, \m
     subs \n, \x, \n
     csel \x, \x, \n, mi
 .endm
 
-// decrement x, wrapping to keep in range [0, n)
-// result in x
-// n also modified
-.macro DEC_CLAMP_ZERO_TO_N x, n
-    subs \x, \x, #1
+// increment x, wrapping to keep in range [0, n).
+// x: integer register to add to.
+//      must be in range [0, n).
+//      will be modified.
+//      will hold result.
+// n: integer register holding value to wrap at.
+//      will be modified.
+// comparison flags:
+//      lt => no wrap
+//      ge => wrap
+.macro INC_CLAMP_ZERO_TO_N x, n
+    ADD_CLAMP_ZERO_TO_N \x, \n, #1
+.endm
+
+// sub m from x, wrapping to keep in range [0, n)
+// x: integer register to sub from.
+//      must be in range [0, n)
+//      will be modified.
+//      will hold result.
+// n: integer register holding value to wrap to.
+//      will be modified.
+// m: integer immediate or register in range [0, n].
+//      will NOT be modified.
+// comparison flags:
+//      lt => wrap
+//      ge => no wrap
+.macro SUB_CLAMP_ZERO_TO_N x, n, m
+    subs \x, \x, \m
     add \n, \n, \x
     csel \x, \n, \x, mi
+.endm
+
+// decrement x, wrapping to keep in range [0, n)
+// x: integer register to sub from.
+//      must be in range [0, n)
+//      will be modified.
+//      will hold result.
+// n: integer register holding value to wrap to.
+//      will be modified.
+// m: integer immediate or register in range [0, n].
+//      will NOT be modified.
+// comparison flags:
+//      lt => wrap
+//      ge => no wrap
+.macro DEC_CLAMP_ZERO_TO_N x, n
+    SUB_CLAMP_ZERO_TO_N \x, \n, #1
 .endm
 
 // update comparison flags for the direction moving. considering wrapping.
@@ -125,58 +176,69 @@
     fcmp \s_scratch_3, #0.0
 .endm
 
-// TODO(TB): change to use an index instead of byte index, it is confusing
-// TODO(TB): make a simpler macro that just checks collision of a single index, instead of all indices in a range
 // check for collions between the specified x and y indices, and the specified sections of the snake body.
 // after calling, the result flags give the result:
 //              eq => collision
 //              ne => no collision
 // i_x, i_y: x and y indices to check against collision with specified sections of snake body.
 //              will NOT be modified.
-// i_ti: starting byte index into snake body to check collisions against.
-//              byte index not index.
+// i_ti: starting index into snake body to check collisions against.
 //              will be modified.
-// i_ti_end: ending byte index (inclusive) into snake body to check collisions against.
-//              byte index not index.
+// i_ti_end: ending index (inclusive) into snake body to check collisions against.
 //              will NOT be modified.
 // i_tx, i_ty: to be used as test x and y indices.
 //              will be modified.
 // i_body: snake body pointer.
 //              will NOT be modified.
-// i_scratch_1: scratch buffer.
-//              used to hold CELL_COUNT_2D_TIMES_2.
+// i_scratch: scratch buffer.
+//              used to hold CELL_COUNT_2D.
 //              used to signal loop exit.
 //              will be modified.
-// i_scratch_2: scratch buffer.
-//              used to hold CELL_COUNT_2D_TIMES_2.
+// i_cell_count_2d: used to hold CELL_COUNT_2D.
 //              will be modified.
-.macro CHECK_COLLISION i_x, i_y, i_ti, i_ti_end, i_tx, i_ty, i_body, i_scratch_1, i_scratch_2
-    GET_CELL_COUNT_2D w\i_scratch_2
-    lsl w\i_scratch_2, w\i_scratch_2, #1
+.macro CHECK_COLLISION i_x, i_y, i_ti, i_ti_end, i_tx, i_ty, i_body, i_scratch, i_cell_count_2d
+    GET_CELL_COUNT_2D w\i_cell_count_2d
     b 2f
     1:
-        ldrb w\i_tx, [x\i_body, x\i_ti]
-        add w\i_ti, w\i_ti, #1
-        ldrb w\i_ty, [x\i_body, x\i_ti]
-        sub w\i_tx, w\i_x, w\i_tx
-        sub w\i_ty, w\i_y, w\i_ty
-        orr w\i_tx, w\i_tx, w\i_ty
-        cmp w\i_tx, wzr
+        CHECK_COLLISION_AGAINST_INDEX \i_x, \i_y, \i_ti, \i_tx, \i_ty, \i_body
         // if collision, skip the rest of body loop, to the increment and re check_collision loop
         // else, increment and keep looping
         b.eq 3f
 
         // no collision
 
-        cmp w\i_scratch_1, w\i_scratch_2
+        cmp w\i_scratch, w\i_cell_count_2d
         b.ne 3f
 
-        INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch_1
+        INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch
     2:
         cmp w\i_ti, w\i_ti_end
-        csel w\i_scratch_1, wzr, w\i_scratch_2, eq
+        csel w\i_scratch, wzr, w\i_cell_count_2d, eq
         b 1b
     3:
+.endm
+
+// check for collions between the specified x and y indices, and the section of the snake body at specified index.
+// after calling, the result flags give the result:
+//              eq => collision
+//              ne => no collision
+// i_x, i_y: x and y indices to check against collision with specified section of snake body.
+//              will NOT be modified.
+// i_ti: index into snake body to check collision against.
+//              will NOT be modified.
+// i_tx, i_ty: to be used as test x and y indices.
+//              will be modified.
+// i_body: snake body pointer.
+//              will NOT be modified.
+.macro CHECK_COLLISION_AGAINST_INDEX i_x, i_y, i_ti, i_tx, i_ty, i_body
+    lsl x\i_ty, x\i_ti, #1
+    ldrb w\i_tx, [x\i_body, x\i_ty]
+    add x\i_ty, x\i_ty, #1
+    ldrb w\i_ty, [x\i_body, x\i_ty]
+    sub w\i_tx, w\i_x, w\i_tx
+    sub w\i_ty, w\i_y, w\i_ty
+    orr w\i_tx, w\i_tx, w\i_ty
+    cmp w\i_tx, wzr
 .endm
 
 // calculate snake length
@@ -484,11 +546,10 @@ struct Game {
             ldrh w0, [x19, APPLE_X_OFFSET]
             // w1 = apple y
             ldrh w1, [x19, APPLE_Y_OFFSET]
-            // w2 = head byte index (start index)
-            mov w3, #2
-            mul w2, w21, w3
-            // w3 = head byte index (end index)
-            mov w3, w2
+            // w2 = head index (start index)
+            mov w2, w21
+            // w3 = head index (end index)
+            mov w3, w21
             CHECK_COLLISION 0, 1, 2, 3, 4, 5, 7, 6, 9
             mov w0, #1
             csel w24, w0, wzr, eq
@@ -521,26 +582,15 @@ struct Game {
             SNAKE_LENGTH 0, 20, 21, 1
             cmp w0, #4
             b.le after_self_collision
-            // TODO(TB): if collided with an apple, could not have collided with self
-            mov w7, #2
             // x2 = ti
-            mul x2, x20, x7
+            mov x2, x20
             // x3 = ti_end
             mov x3, x21
-            // TODO(TB): make DEC_CLAMP_ZERO_TO_N take an argument of how much to decrement (must be in range [0, n))
-            GET_CELL_COUNT_2D w5
-            mov w4, w5
-            DEC_CLAMP_ZERO_TO_N w3, w4
-            mov w4, w5
-            DEC_CLAMP_ZERO_TO_N w3, w4
-            mov w4, w5
-            DEC_CLAMP_ZERO_TO_N w3, w4
-            mov w4, w5
-            DEC_CLAMP_ZERO_TO_N w3, w4
-            mul w3, w3, w7
+            GET_CELL_COUNT_2D w4
+            SUB_CLAMP_ZERO_TO_N w3, w4, #4
             add x6, x19, BODY_OFFSET
             // w0 = head x
-            mul w0, w21, w7
+            lsl w0, w21, #1
             // w1 = head y
             add w1, w0, #1
             ldrb w0, [x6, x0]
@@ -898,20 +948,8 @@ struct Game {
         sub w5, w5, #1
         and w0, w0, w5
 
-        // w0 = x_index
-        // w1 = y_index
-        // w2 = body byte index
-        // w3 = body test x index
-        // w4 = body test y index
-        // w5 = CELL_COUNT_1D * 2
-        // w6 = tail byte index (tail multipled by 2)
-        // w7 = head byte index (head multipled by 2)
-        // x19 = game struct pointer
-        // x20 = body pointer
         mov x19, x2
         add x20, x19, BODY_OFFSET
-        lsl w6, w6, #1
-        lsl w7, w7, #1
         check_collision:
             mov w2, w6
             CHECK_COLLISION 0, 1, 2, 7, 3, 4, 20, 21, 9
@@ -919,7 +957,6 @@ struct Game {
         check_collision_increment:
             mov w3, CELL_COUNT_1D
             INC_CLAMP_ZERO_TO_N w0, w3
-            // TODO(TB): make version of INC_CLAMP_ZERO_TO_N that sets condition flags?
             mov w3, CELL_COUNT_1D
             mov w4, w1
             INC_CLAMP_ZERO_TO_N w4, w3

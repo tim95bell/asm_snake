@@ -488,16 +488,14 @@ struct Game {
             // previous_move_direction = move_direction
             mov w22, w23
             // w1 = index
-            mov w0, #2
-            mul w1, w21, w0
+            lsl w1, w21, #1
             // w5 = x
             ldrb w5, [x7, x1]
             // w6 = y
             add w1, w1, #1
             ldrb w6, [x7, x1]
 
-            mov w3, #4
-            mul w3, w23, w3
+            lsl w3, w23, #2
             adrp x2, jt@PAGE
             add x2, x2, jt@PAGEOFF
             add x2, x2, x3
@@ -527,7 +525,7 @@ struct Game {
             mov w3, w2
             mov w1, w21
             INC_CLAMP_ZERO_TO_N w1, w3
-            mul w1, w1, w0
+            lsl w1, w1, #1
 
             // update new head x and y in body
             strb w5, [x7, x1]
@@ -785,8 +783,7 @@ struct Game {
     cbnz w24, after_draw_tail_most_cell
 
     // draw tail most cell
-    mov w0, #2
-    mul w1, w0, w25
+    lsl w1, w25, #1
     ldrb w2, [x7, x1]
     // x_index
     scvtf s0, w2
@@ -797,7 +794,7 @@ struct Game {
     // increment tail
     GET_CELL_COUNT_2D w1
     INC_CLAMP_ZERO_TO_N w25, w1
-    mul w1, w0, w25
+    lsl w1, w25, #1
     ldrb w2, [x7, x1]
     // next_x_index
     scvtf s2, w2
@@ -841,8 +838,7 @@ struct Game {
     b draw_body_loop_condition
 
     draw_body_loop:
-        mov w0, #2
-        mul w0, w0, w25
+        lsl w0, w25, #1
         ldrb w1, [x27, x0]
         // x_index
         scvtf s0, w1
@@ -870,8 +866,7 @@ struct Game {
         b.ne draw_body_loop
 
     // draw head
-    mov w0, #2
-    mul w1, w0, w25
+    lsl w1, w25, #1
     ldrb w2, [x27, x1]
     // x_index
     scvtf s0, w2
@@ -881,7 +876,7 @@ struct Game {
     scvtf s1, w2
     GET_CELL_COUNT_2D w1
     DEC_CLAMP_ZERO_TO_N w25, w1
-    mul w1, w0, w25
+    lsl w1, w25, #1
     ldrb w2, [x27, x1]
     // prev_x_index
     scvtf s2, w2
@@ -934,14 +929,14 @@ struct Game {
         // w3 = snake_length
         SNAKE_LENGTH 3, 0, 1, 4
         // w4 = cell_count_2d
-        mov w5, CELL_COUNT_1D
-        mul w4, w5, w5
+        GET_CELL_COUNT_2D w4
         // w1 = cell_count_2d - snake_length
         sub w1, w4, w3
         // GetRandomValue is inclusive of both arguments
         sub w1, w1, #1
         mov w0, wzr
         bl _GetRandomValue
+        mov w5, CELL_COUNT_1D
         // w1 = y = index / cell_count_1d
         udiv w1, w0, w5
         // w0 = x = index % cell_count_1d

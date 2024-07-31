@@ -5,8 +5,9 @@
 // CELL_COUNT_1D: amount of cells in a single dimension. The grid is a square, so this is both the rows and cols.
 //      must be a power of 2
 .equ CELL_COUNT_1D, 32
-// BODY_CAPACITY: ((CELL_COUNT_1D * CELL_COUNT_1D) + 1)
-.equ BODY_CAPACITY, 1025
+// BODY_CAPACITY: CELL_COUNT_1D * CELL_COUNT_1D
+.equ BODY_CAPACITY, 1024
+.equ BODY_CAPACITY_TIMES_2, 2048
 // MARGIN_DIVISOR: margin_size = cell_size / MARGIN_DIVISOR
 .equ MARGIN_DIVISOR, 5
 .equ MIN_WINDOW_SIZE_1D, 200
@@ -20,14 +21,16 @@
 .equ CELL_SIZE_OFFSET, 12
 .equ MARGIN_SIZE_OFFSET, 16
 .equ LAST_UPDATE_TIME_OFFSET, 20
-.equ TIME_STEP_S_OFFSET, 24
-.equ TAIL_OFFSET, 28
-.equ HEAD_OFFSET, 30
-.equ APPLE_X_OFFSET, 32
-.equ APPLE_Y_OFFSET, 34
-.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 36
-.equ MOVE_DIRECTION_OFFSET, 37
-.equ BODY_OFFSET, 38
+.equ MIN_TIME_STEP_S_OFFSET, 24
+.equ MAX_TIME_STEP_S_OFFSET, 28
+.equ TIME_STEP_S_OFFSET, 32
+.equ TAIL_OFFSET, 36
+.equ HEAD_OFFSET, 38
+.equ APPLE_X_OFFSET, 40
+.equ APPLE_Y_OFFSET, 42
+.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 44
+.equ MOVE_DIRECTION_OFFSET, 45
+.equ BODY_OFFSET, 46
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
 .equ DOWN_KEY_CODE, 264
@@ -39,9 +42,9 @@
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x828
-// STACK_FRAME_SIZE = 0x8c8 (round up to multiple of 0x10) = 0x8d0
-.equ STACK_FRAME_SIZE, 0x8d0
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x830
+// STACK_FRAME_SIZE = 0x8d0 (round up to multiple of 0x10) = 0x8e0
+.equ STACK_FRAME_SIZE, 0x8e0
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -60,8 +63,10 @@
 
 .data
     WINDOW_NAME: .asciz "ASM Snake"
-    // TIME_STEP_S: the time in seconds, that everything updates in the game by (since it has discrete steps)
-    TIME_STEP_S: .float 0.2
+    // MIN_TIME_STEP_S: the minimum time in seconds, that everything updates in the game by (since it has discrete steps)
+    MIN_TIME_STEP_S: .float 0.05
+    // MAX_TIME_STEP_S: the maximum time in seconds, that everything updates in the game by (since it has discrete steps)
+    MAX_TIME_STEP_S: .float 0.15
 
 .macro CREATE_COLOUR x_dest, ab, gr
     movk \x_dest, \ab, lsl #0x10
@@ -157,12 +162,12 @@
 
         // no collision
 
-        cmp w\i_scratch, BODY_CAPACITY
+        cmp w\i_scratch, BODY_CAPACITY_TIMES_2
         b.ne 3f
 
         INC_CLAMP_ZERO_TO_N w\i_ti, w\i_scratch
     2:
-        mov w\i_scratch, BODY_CAPACITY
+        mov w\i_scratch, BODY_CAPACITY_TIMES_2
         cmp w\i_ti, w\i_ti_end
         csel w\i_scratch, wzr, w\i_scratch, eq
         b 1b
@@ -185,7 +190,21 @@
     csel w\i_result, w\i_scratch, w\i_result, mi
 .endm
 
-.macro INIT_SNAKE game_ptr, tail_out, head_out, previous_move_direction_out, move_direction_out, scratch_1, scratch_2, scratch_3, scratch_4
+// floating point lerp between `a` and `b` by `t`.
+// result: will contain the result.
+//      can be equal to `a` if it can be modified.
+// scratch: will be modified.
+//      can be equal to `b` if it can be modified.
+.macro FLERP result, a, b, t, scratch
+    // b = b - a
+    fsub \scratch, \b, \a
+    // a = t * b` + a = t * (b - a) + a
+    fmadd \result, \t, \scratch, \a
+.endm
+
+.macro INIT_SNAKE game_ptr, tail_out, head_out, previous_move_direction_out, move_direction_out, scratch_1, scratch_2, scratch_3, scratch_4, f_scratch_1
+        ldr s\f_scratch_1, [x\game_ptr, MAX_TIME_STEP_S_OFFSET]
+        str s\f_scratch_1, [x\game_ptr, TIME_STEP_S_OFFSET]
         // tail
         mov w\tail_out, #0
         // head
@@ -237,6 +256,8 @@ struct Game {
     F32 cell_size; // pixels
     F32 margin_size; // pixels
     F32 last_update_time; // seconds
+    F32 min_time_step_s; // seconds
+    F32 max_time_step_s; // seconds
     F32 time_step_s; // seconds
     // tail: index of head cell. multiply by 2 to get byte location
     U16 tail;
@@ -297,16 +318,19 @@ struct Game {
         bl _SetTargetFPS
 
         // init snake struct
-        // time_step_s
-        adrp x0, TIME_STEP_S@PAGE
-        add x0, x0, TIME_STEP_S@PAGEOFF
+        // min_time_step_s
+        adrp x0, MIN_TIME_STEP_S@PAGE
+        add x0, x0, MIN_TIME_STEP_S@PAGEOFF
         ldr s0, [x0]
-        str s0, [x19, TIME_STEP_S_OFFSET]
+        adrp x1, MAX_TIME_STEP_S@PAGE
+        add x1, x1, MAX_TIME_STEP_S@PAGEOFF
+        ldr s1, [x1]
+        stp s0, s1, [x19, MIN_TIME_STEP_S_OFFSET]
 
         mov x0, x19
         bl init_based_on_window_size
 
-        INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3
+        INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3, 0
 
         mov w0, w20
         mov w1, w21
@@ -473,6 +497,14 @@ struct Game {
                 mov w1, w21
                 mov x2, x19
                 bl place_apple
+                ldp s0, s1, [x19, MIN_TIME_STEP_S_OFFSET]
+                mov w2, BODY_CAPACITY
+                scvtf s2, w2
+                SNAKE_LENGTH 3, 20, 21, 1
+                scvtf s3, w3
+                fdiv s3, s3, s2
+                FLERP s10, s1, s0, s3, s0
+                str s10, [x19, TIME_STEP_S_OFFSET]
 
             hit_apple_last_update_finish:
 
@@ -543,7 +575,7 @@ struct Game {
             csel w0, w1, w2, eq
             cbnz w0, game_over_input_loop_cond
             // space or enter
-            INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3
+            INIT_SNAKE 19, 20, 21, 22, 23, 0, 1, 2, 3, 0
             fmov s8, #0.0
             bl _GetTime
             fcvt s0, d0
@@ -846,6 +878,8 @@ struct Game {
         mul w4, w5, w5
         // w1 = cell_count_2d - snake_length
         sub w1, w4, w3
+        // GetRandomValue is inclusive of both arguments
+        sub w1, w1, #1
         mov w0, wzr
         bl _GetRandomValue
         // w1 = y = index / cell_count_1d
@@ -867,8 +901,6 @@ struct Game {
         // w21 = BODY_CAPACITY
         mov x19, x2
         add x20, x19, BODY_OFFSET
-        mov w5, CELL_COUNT_1D
-        lsl w5, w5, #1
         lsl w6, w6, #1
         lsl w7, w7, #1
         check_collision:
@@ -876,13 +908,13 @@ struct Game {
             CHECK_COLLISION 0, 1, 2, 7, 3, 4, 20, 21
             b.ne check_collision_done
         check_collision_increment:
-            mov w3, w21
+            mov w3, CELL_COUNT_1D
             INC_CLAMP_ZERO_TO_N w0, w3
             // TODO(TB): make version of INC_CLAMP_ZERO_TO_N that sets condition flags?
-            cmp w0, wzr
-            mov w3, w21
+            mov w3, CELL_COUNT_1D
             mov w4, w1
             INC_CLAMP_ZERO_TO_N w4, w3
+            cmp w0, wzr
             csel w1, w4, w1, eq
             b check_collision
 

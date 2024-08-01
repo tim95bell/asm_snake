@@ -15,22 +15,17 @@
 .equ RIGHT, 1
 .equ DOWN, 2
 .equ LEFT, 3
-.equ BOARD_SIZE_1D_OFFSET, 0
-.equ BOARD_X_POSITION_OFFSET, 4
-.equ BOARD_Y_POSITION_OFFSET, 8
-.equ CELL_SIZE_OFFSET, 12
-.equ MARGIN_SIZE_OFFSET, 16
-.equ LAST_UPDATE_TIME_OFFSET, 20
-.equ MIN_TIME_STEP_S_OFFSET, 24
-.equ MAX_TIME_STEP_S_OFFSET, 28
-.equ TIME_STEP_S_OFFSET, 32
-.equ TAIL_OFFSET, 36
-.equ HEAD_OFFSET, 38
-.equ APPLE_X_OFFSET, 40
-.equ APPLE_Y_OFFSET, 42
-.equ PREVIOUS_MOVE_DIRECTION_OFFSET, 44
-.equ MOVE_DIRECTION_OFFSET, 45
-.equ BODY_OFFSET, 46
+.equ BOARD_X_POSITION_OFFSET, 0
+.equ BOARD_Y_POSITION_OFFSET, 4
+.equ CELL_SIZE_OFFSET, 8
+.equ MARGIN_SIZE_OFFSET, 12
+.equ LAST_UPDATE_TIME_OFFSET, 16
+.equ MIN_TIME_STEP_S_OFFSET, 20
+.equ MAX_TIME_STEP_S_OFFSET, 24
+.equ TIME_STEP_S_OFFSET, 28
+.equ APPLE_X_OFFSET, 32
+.equ APPLE_Y_OFFSET, 34
+.equ BODY_OFFSET, 44
 
 .equ UP_KEY_CODE, 265
 .equ RIGHT_KEY_CODE, 262
@@ -42,9 +37,9 @@
 // D_REGISTER_BACKUP_SIZE = 0x50
 // X_REGISTER_BACKUP_SIZE = 0x40
 // FP_AND_LR_SIZE = 0x10
-// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + 2 + 2 + 1 + 1 + (((CELL_COUNT_1D * CELL_COUNT_1D) + 1) * 2)) = 0x830
-// STACK_FRAME_SIZE = 0x8d0 (round up to multiple of 0x10) = 0x8d0
-.equ STACK_FRAME_SIZE, 0x8d0
+// GAME_STRUCT_SIZE = (4 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 2 + 2 + (CELL_COUNT_1D * CELL_COUNT_1D * 2)) = 0x824
+// STACK_FRAME_SIZE = 0x810 (round up to multiple of 0x10) = 0x810
+.equ STACK_FRAME_SIZE, 0x810
 
 .extern _InitWindow
 .extern _WindowShouldClose
@@ -323,7 +318,6 @@
 
 /*
 struct Game {
-    F32 board_size_1d; // pixels
     F32 board_x_position; // pixels
     F32 board_y_position; // pixels
     F32 cell_size; // pixels
@@ -332,23 +326,16 @@ struct Game {
     F32 min_time_step_s; // seconds
     F32 max_time_step_s; // seconds
     F32 time_step_s; // seconds
-    // tail: index of head cell. multiply by 2 to get byte location
-    U16 tail;
-    // head: index of head cell. multiply by 2 to get byte location
-    U16 head;
     U16 apple_x;
     U16 apple_y;
-    U8 previous_move_direction;
-    U8 move_direction;
     // pairs of U8 for x, y coordinates.
-    // one for every cell, + 1 so we can remember where the tail end was last update
-    U8 body[((cell_count_1d * cell_count_1d) + 1) * 2];
+    // one for every cell
+    U8 body[cell_count_1d * cell_count_1d * 2];
 };
 */
 
 .text
     // NOTE(TB): in the main function, after initialisation, the following registers will have these associated values.
-    // tail, head, previous_move_direction, and move_direction are not ever read or written to memory (in the Game struct).
     // x19 => Game struct pointer
     // x20 => tail
     // x21 => head
@@ -1015,12 +1002,10 @@ struct Game {
         fsub s2, s4, s7 // cell_count_1d - 1
         fdiv s6, s6, s2 // margin size
 
-        // board_size_1d , board_x_position
-        stp s0, s1, [x19, BOARD_SIZE_1D_OFFSET]
-        // board_y_position, cell_size
-        stp s3, s5, [x19, BOARD_Y_POSITION_OFFSET]
-        // margin_size
-        str s6, [x19, MARGIN_SIZE_OFFSET]
+        // board_x_position, board_y_position
+        stp s1, s3, [x19, BOARD_X_POSITION_OFFSET]
+        // cell_size, margin_size
+        stp s5, s6, [x19, CELL_SIZE_OFFSET]
 
         ldp fp, lr, [sp], #0x10
         ldp x19, x20, [sp], #0x10

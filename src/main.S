@@ -378,7 +378,7 @@ struct Game {
         bl _SetTargetFPS
 
         // init snake struct
-        // min_time_step_s
+        // min_time_step_s and max_time_step_s
         adrp x0, MIN_TIME_STEP_S@PAGE
         add x0, x0, MIN_TIME_STEP_S@PAGEOFF
         ldr s0, [x0]
@@ -397,16 +397,18 @@ struct Game {
         mov x2, x19
         bl place_apple
 
+        // last update time
         bl _GetTime
-        fcvt s0, d0 // last update time
+        fcvt s0, d0
         str s0, [x19, LAST_UPDATE_TIME_OFFSET]
-        fmov s8, wzr // frame dt
 
+        // frame dt
+        fmov s8, wzr
+
+        // hit_apple_last_update
         mov w24, 0
 
         b play_draw
-    game_loop:
-
     play:
         bl _IsWindowResized
         cbz w0, 1f
@@ -415,19 +417,15 @@ struct Game {
             bl init_based_on_window_size
         1:
         // handle input
-        mov w25, UP_KEY_CODE
-        mov w26, RIGHT_KEY_CODE
-        mov w27, DOWN_KEY_CODE
-        mov w28, LEFT_KEY_CODE
         b play_input_loop_cond
         play_input_loop:
-            cmp w0, w25
+            cmp w0, UP_KEY_CODE
             b.eq 1f
-            cmp w0, w26
+            cmp w0, RIGHT_KEY_CODE
             b.eq 2f
-            cmp w0, w27
+            cmp w0, DOWN_KEY_CODE
             b.eq 3f
-            cmp w0, w28
+            cmp w0, LEFT_KEY_CODE
             b.eq 4f
             b 5f
             1: // up
@@ -459,34 +457,37 @@ struct Game {
             bl _GetKeyPressed
             cbnz w0, play_input_loop
 
+        // last_update_time
         ldr s9, [x19, LAST_UPDATE_TIME_OFFSET]
-        // update
+        // current_time
         bl _GetTime
         fcvt s0, d0
-        // s8 = time delta
+        // time delta = current_time - last_update_time
         fsub s8, s0, s9
-        // s10 = time step s
+        // time_step_s
         ldr s10, [x19, TIME_STEP_S_OFFSET]
 
         b play_update_loop_condition
         // NOTE(TB): assume update_loop will almost never run more than once, and far more often zero times
         play_update_loop:
+            // body pointer
             add x7, x19, BODY_OFFSET
             // previous_move_direction = move_direction
             mov w22, w23
-            // w1 = index
+            // index
             lsl w1, w21, #1
-            // w5 = x
+            // x
             ldrb w5, [x7, x1]
-            // w6 = y
+            // y
             add w1, w1, #1
             ldrb w6, [x7, x1]
 
+            // move_direction * 4
             lsl w3, w23, #2
             adrp x2, jt@PAGE
             add x2, x2, jt@PAGEOFF
             add x2, x2, x3
-            // x0 = CELL_COUNT_1D
+            // CELL_COUNT_1D
             mov x3, CELL_COUNT_1D
             br x2
             jt:
@@ -507,11 +508,12 @@ struct Game {
                 DEC_CLAMP_ZERO_TO_N w5, w3
             direction_done:
 
-            // w1 = new head x index
+            // new head x index
             GET_CELL_COUNT_2D w2
             mov w3, w2
             mov w1, w21
             INC_CLAMP_ZERO_TO_N w1, w3
+            // new head x byte index
             lsl w1, w1, #1
 
             // update new head x and y in body
@@ -521,19 +523,18 @@ struct Game {
 
             // update head
             mov w1, w2
-            // w21 = head
             INC_CLAMP_ZERO_TO_N w21, w1
 
             cbnz w24, hit_apple_last_update
 
             // check collision between new head and apple
-            // w0 = apple x
+            // apple x
             ldrh w0, [x19, APPLE_X_OFFSET]
-            // w1 = apple y
+            // apple y
             ldrh w1, [x19, APPLE_Y_OFFSET]
-            // w2 = head index (start index)
+            // head index (start index)
             mov w2, w21
-            // w3 = head index (end index)
+            // head index (end index)
             mov w3, w21
             CHECK_COLLISION 0, 1, 2, 3, 4, 5, 7, 6, 9
             mov w0, #1
@@ -552,6 +553,7 @@ struct Game {
                 mov w1, w21
                 mov x2, x19
                 bl place_apple
+                // update time_step_s
                 ldp s0, s1, [x19, MIN_TIME_STEP_S_OFFSET]
                 GET_CELL_COUNT_2D w2
                 scvtf s2, w2
@@ -567,16 +569,16 @@ struct Game {
             SNAKE_LENGTH 0, 20, 21, 1
             cmp w0, #4
             b.le after_self_collision
-            // x2 = ti
+            // ti
             mov x2, x20
-            // x3 = ti_end
+            // ti_end
             mov x3, x21
             GET_CELL_COUNT_2D w4
             SUB_CLAMP_ZERO_TO_N w3, w4, #4
             add x6, x19, BODY_OFFSET
-            // w0 = head x
+            // head x
             lsl w0, w21, #1
-            // w1 = head y
+            // head y
             add w1, w0, #1
             ldrb w0, [x6, x0]
             ldrb w1, [x6, x1]
@@ -660,8 +662,8 @@ struct Game {
         mov x0, xzr
         ret
 
+    // NOTE(TB): this function does not take arguments or backup the registers it uses. It assumes being called in the context of the main function.
     draw_main_game:
-        // TODO(TB): backup registers used
         stp fp, lr, [sp, #-0x10]!
         mov fp, sp
         GET_CLEAR_COLOUR x0
@@ -671,15 +673,9 @@ struct Game {
         GET_EMPTY_CELL_COLOUR x28
 
         // draw grid
-        // s9 = x_coord
-        // s10 = board_x_position
-        // s11 = board_y_position
-        // s12 = cell_size
-        // s13 = cell_size + margin_size
-        // s14 = x_index
-        // s15 = y_index
+        // x_index
         scvtf s0, wzr
-        fmov s14, s0 // x_index
+        fmov s14, s0
         // board_x_position, board_y_position
         ldp s10, s11, [x19, BOARD_X_POSITION_OFFSET]
         // cell_size, margin_size
@@ -689,17 +685,17 @@ struct Game {
         b x_loop_cond
 
     x_loop:
+        // y_index
         scvtf s0, wzr
-        fmov s15, s0 // y_index
-        // s9 = x_coord (pixels)
+        fmov s15, s0
+        // x_coord (pixels)
         fmadd s9, s14, s13, s10 // x_index * (cell_size + margin_size) + board_x_position
         b y_loop_cond
         y_loop:
-            // x
+            // x_coord
             fmov s0, s9
 
-            // y
-            // s1 = y_coord (pixels)
+            // y_coord (pixels)
             fmadd s1, s15, s13, s11 // y_index * (cell_size + margin_size) + board_y_position
 
             // width
@@ -749,19 +745,12 @@ struct Game {
     // draw
     bl _DrawRectangleV
 
-    // w25 = index = tail
+    // index = tail
     mov w25, w20
-    // s10 = cell_size
-    ldp s10, s11, [x19, CELL_SIZE_OFFSET]
-    // s11 = cell_size_plus_margin_size
-    fadd s11, s11, s10
-    // s12 = board_x_position
-    // s13 = board_y_position
-    ldp s12, s13, [x19, BOARD_X_POSITION_OFFSET]
     // s14 = dt * cell_size
-    fmul s14, s8, s10
+    fmul s14, s8, s12
     // s15 = (1 - dt) * cell_size
-    fsub s15, s10, s14
+    fsub s15, s12, s14
 
     GET_SNAKE_COLOUR x26
 
@@ -804,15 +793,15 @@ struct Game {
     fcsel s3, s14, s7, ne
 
     // x
-    fmadd s0, s0, s11, s12
+    fmadd s0, s0, s13, s10
     fadd s0, s0, s4
     // y
-    fmadd s1, s1, s11, s13
+    fmadd s1, s1, s13, s11
     fadd s1, s1, s5
     // width
-    fsub s2, s10, s2
+    fsub s2, s12, s2
     // height
-    fsub s3, s10, s3
+    fsub s3, s12, s3
     // colour
     mov x0, x26
     // draw
@@ -834,13 +823,13 @@ struct Game {
         // y_index
         scvtf s1, w1
         // x
-        fmadd s0, s0, s11, s12
+        fmadd s0, s0, s13, s10
         // y
-        fmadd s1, s1, s11, s13
+        fmadd s1, s1, s13, s11
         // width
-        fmov s2, s10
+        fmov s2, s12
         // height
-        fmov s3, s10
+        fmov s3, s12
         // colour
         mov x0, x26
 
@@ -886,15 +875,15 @@ struct Game {
     fcsel s5, s15, s7, ne
 
     // x
-    fmadd s0, s0, s11, s12
+    fmadd s0, s0, s13, s10
     fadd s0, s0, s2
     // y
-    fmadd s1, s1, s11, s13
+    fmadd s1, s1, s13, s11
     fadd s1, s1, s3
     // width
-    fsub s2, s10, s4
+    fsub s2, s12, s4
     // height
-    fsub s3, s10, s5
+    fsub s3, s12, s5
     // colour
     mov x0, x26
     // draw
